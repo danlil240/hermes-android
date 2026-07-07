@@ -9,8 +9,8 @@ import 'package:speech_to_text/speech_recognition_error.dart';
 import 'package:speech_to_text/speech_recognition_result.dart';
 import 'package:speech_to_text/speech_to_text.dart';
 
-import '../services/connection_manager.dart';
-import '../utils/responsive.dart';
+import '../../core/network/connection_manager.dart';
+import '../../shared/responsive.dart';
 
 class ChatScreen extends StatefulWidget {
   final SavedConnection connection;

@@ -1,6 +1,6 @@
 // Skills browser — list installed skills with enabled/disabled status.
 import 'package:flutter/material.dart';
-import '../services/connection_manager.dart';
+import '../../core/network/connection_manager.dart';
 
 class SkillsScreen extends StatefulWidget {
   final SavedConnection connection;

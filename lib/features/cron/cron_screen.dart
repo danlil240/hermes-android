@@ -7,7 +7,7 @@
 //      PUT /api/cron/jobs/{id} — update existing job
 import 'package:flutter/material.dart';
 
-import '../services/connection_manager.dart';
+import '../../core/network/connection_manager.dart';
 
 class CronScreen extends StatefulWidget {
   final SavedConnection connection;

@@ -2,7 +2,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_tts/flutter_tts.dart';
 import 'package:shared_preferences/shared_preferences.dart';
-import '../services/connection_manager.dart';
+import '../../core/network/connection_manager.dart';
 import '../../main.dart';
 import 'package:package_info_plus/package_info_plus.dart';
 

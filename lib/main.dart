@@ -1,9 +1,9 @@
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:shared_preferences/shared_preferences.dart';
-import 'core/services/connection_manager.dart';
-import 'core/screens/session_list_screen.dart';
-import 'core/utils/responsive.dart';
+import 'core/network/connection_manager.dart';
+import 'features/sessions/session_list_screen.dart';
+import 'shared/responsive.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
