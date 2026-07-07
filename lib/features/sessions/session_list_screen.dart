@@ -1,11 +1,11 @@
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
-import '../services/connection_manager.dart';
-import 'chat_screen.dart';
-import 'settings_screen.dart';
-import 'memory_screen.dart';
-import 'cron_screen.dart';
-import 'skills_screen.dart';
+import '../../core/network/connection_manager.dart';
+import '../chat/chat_screen.dart';
+import '../settings/settings_screen.dart';
+import '../memory/memory_screen.dart';
+import '../cron/cron_screen.dart';
+import '../skills/skills_screen.dart';
 
 class SessionListScreen extends StatefulWidget {
   final SavedConnection connection;

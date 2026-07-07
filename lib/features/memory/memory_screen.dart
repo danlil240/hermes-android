@@ -7,7 +7,7 @@
 //
 // API: GET /api/config returns the full config including memory.
 import 'package:flutter/material.dart';
-import '../services/connection_manager.dart';
+import '../../core/network/connection_manager.dart';
 
 class MemoryScreen extends StatefulWidget {
   final SavedConnection connection;
