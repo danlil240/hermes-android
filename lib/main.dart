@@ -1,20 +1,35 @@
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'core/auth/biometric_lock.dart';
 import 'core/network/connection_manager.dart';
+import 'core/storage/secure_storage.dart';
 import 'features/sessions/session_list_screen.dart';
 import 'shared/responsive.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
   final prefs = await SharedPreferences.getInstance();
-  final connManager = ConnectionManager(prefs);
-  runApp(HermesApp(connManager: connManager));
+  final secureStorage = SecureStorage();
+  final connManager = ConnectionManager(prefs, secureStorage);
+  final biometricLock = BiometricLock();
+  runApp(HermesApp(
+    connManager: connManager,
+    biometricLock: biometricLock,
+    prefs: prefs,
+  ));
 }
 
 class HermesApp extends StatefulWidget {
   final ConnectionManager connManager;
-  const HermesApp({required this.connManager, super.key});
+  final BiometricLock biometricLock;
+  final SharedPreferences prefs;
+  const HermesApp({
+    required this.connManager,
+    required this.biometricLock,
+    required this.prefs,
+    super.key,
+  });
 
   @override
   State<HermesApp> createState() => HermesAppState();
@@ -45,6 +60,53 @@ class HermesApp extends StatefulWidget {
 }
 
 class HermesAppState extends State<HermesApp> {
+  bool _unlocked = false;
+  bool _biometricAvailable = false;
+  bool _biometricEnabled = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _checkBiometric();
+  }
+
+  Future<void> _checkBiometric() async {
+    final available = await widget.biometricLock.isAvailable();
+    final enabled = widget.prefs.getBool('biometric_lock') ?? false;
+    if (!mounted) return;
+    setState(() {
+      _biometricAvailable = available;
+      _biometricEnabled = enabled;
+    });
+    if (enabled && available) {
+      await _promptBiometric();
+    } else {
+      if (!mounted) return;
+      setState(() => _unlocked = true);
+    }
+  }
+
+  Future<void> _promptBiometric() async {
+    final result = await widget.biometricLock.authenticate(
+      reason: 'Please authenticate to unlock Hermes',
+    );
+    if (!mounted) return;
+    setState(() {
+      _unlocked = result == BiometricAuthResult.success;
+    });
+    if (result != BiometricAuthResult.success) {
+      // Retry after a short delay if the user canceled
+      Future.delayed(const Duration(seconds: 1), () {
+        if (mounted && !_unlocked) _promptBiometric();
+      });
+    }
+  }
+
+  Future<void> _toggleBiometricLock(bool enabled) async {
+    await widget.prefs.setBool('biometric_lock', enabled);
+    setState(() => _biometricEnabled = enabled);
+  }
+
   @override
   Widget build(BuildContext context) {
     const gold = Color(0xFFD4AF37);
@@ -98,7 +160,62 @@ class HermesAppState extends State<HermesApp> {
           foregroundColor: Colors.black,
         ),
       ),
-      home: HomeScreen(connManager: widget.connManager),
+      home: _unlocked
+          ? HomeScreen(
+              connManager: widget.connManager,
+              biometricLock: widget.biometricLock,
+              biometricAvailable: _biometricAvailable,
+              biometricEnabled: _biometricEnabled,
+              onToggleBiometric: _toggleBiometricLock,
+            )
+          : _LockScreen(
+              onRetry: _promptBiometric,
+            ),
+    );
+  }
+}
+
+/// Full-screen biometric lock shown when the app starts and biometric
+/// lock is enabled.
+class _LockScreen extends StatelessWidget {
+  final VoidCallback onRetry;
+
+  const _LockScreen({required this.onRetry});
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      body: Center(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const Icon(Icons.lock, size: 64, color: Color(0xFFD4AF37)),
+            const SizedBox(height: 24),
+            Text(
+              'Hermes Locked',
+              style: GoogleFonts.cinzel(
+                fontSize: 28,
+                fontWeight: FontWeight.w700,
+                color: const Color(0xFFD4AF37),
+                letterSpacing: 4,
+              ),
+            ),
+            const SizedBox(height: 12),
+            Text(
+              'Authenticate with biometrics to continue',
+              style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                    color: Colors.grey[500],
+                  ),
+            ),
+            const SizedBox(height: 32),
+            FilledButton.icon(
+              onPressed: onRetry,
+              icon: const Icon(Icons.fingerprint),
+              label: const Text('Unlock'),
+            ),
+          ],
+        ),
+      ),
     );
   }
 }
@@ -151,7 +268,18 @@ class HermesHeader extends StatelessWidget {
 
 class HomeScreen extends StatefulWidget {
   final ConnectionManager connManager;
-  const HomeScreen({required this.connManager, super.key});
+  final BiometricLock biometricLock;
+  final bool biometricAvailable;
+  final bool biometricEnabled;
+  final ValueChanged<bool> onToggleBiometric;
+  const HomeScreen({
+    required this.connManager,
+    required this.biometricLock,
+    required this.biometricAvailable,
+    required this.biometricEnabled,
+    required this.onToggleBiometric,
+    super.key,
+  });
 
   @override
   State<HomeScreen> createState() => _HomeScreenState();
@@ -162,8 +290,9 @@ class _HomeScreenState extends State<HomeScreen> {
   bool _autoNavigated = false;
   static const String _lastConnectionKey = 'last_connection_id';
 
-  void _refresh() {
-    setState(() => _connections = widget.connManager.getConnections());
+  Future<void> _refresh() async {
+    final conns = await widget.connManager.getConnectionsWithSecrets();
+    if (mounted) setState(() => _connections = conns);
   }
 
   @override
@@ -227,8 +356,7 @@ class _HomeScreenState extends State<HomeScreen> {
                 dashboardPort: dashboardPort,
                 dashboardUsername: dashboardUsername,
                 dashboardPassword: dashboardPassword,
-              );
-              _refresh();
+              ).then((_) => _refresh());
             },
       ),
     );
@@ -320,8 +448,9 @@ class _HomeScreenState extends State<HomeScreen> {
                         if (!ctx.mounted) return;
 
                         if (ok) {
-                          widget.connManager.updateApiKey(conn.id, key);
+                          await widget.connManager.updateApiKey(conn.id, key);
                           _refresh();
+                          if (!ctx.mounted) return;
                           Navigator.pop(ctx);
                         } else {
                           setDialogState(() {
@@ -543,7 +672,7 @@ class _HomeScreenState extends State<HomeScreen> {
                         await client.getModelInfo();
                         client.close();
                         if (!ctx.mounted) return;
-                        widget.connManager.updateDashboardAuth(
+                        await widget.connManager.updateDashboardAuth(
                           conn.id,
                           dashboardPort: port,
                           username: user,
@@ -553,6 +682,7 @@ class _HomeScreenState extends State<HomeScreen> {
                           dashboardProxied: proxied,
                         );
                         _refresh();
+                        if (!ctx.mounted) return;
                         Navigator.pop(ctx);
                       } catch (e) {
                         client.close();
@@ -603,8 +733,7 @@ class _HomeScreenState extends State<HomeScreen> {
         trailing: PopupMenuButton<String>(
           onSelected: (v) {
             if (v == 'delete') {
-              widget.connManager.deleteConnection(conn.id);
-              _refresh();
+              widget.connManager.deleteConnection(conn.id).then((_) => _refresh());
             } else if (v == 'apikey') {
               _showApiKeyDialog(conn);
             } else if (v == 'dashboard') {
@@ -641,6 +770,35 @@ class _HomeScreenState extends State<HomeScreen> {
           ),
         ),
         centerTitle: true,
+        actions: [
+          if (widget.biometricAvailable)
+            PopupMenuButton<String>(
+              onSelected: (v) {
+                if (v == 'biometric') {
+                  widget.onToggleBiometric(!widget.biometricEnabled);
+                }
+              },
+              itemBuilder: (_) => [
+                PopupMenuItem(
+                  value: 'biometric',
+                  child: Row(
+                    children: [
+                      Icon(
+                        widget.biometricEnabled
+                            ? Icons.lock
+                            : Icons.lock_open,
+                        size: 20,
+                      ),
+                      const SizedBox(width: 8),
+                      Text(widget.biometricEnabled
+                          ? 'Disable App Lock'
+                          : 'Enable App Lock'),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+        ],
       ),
       body: _connections.isEmpty
           ? Center(

@@ -6,29 +6,66 @@ import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:uuid/uuid.dart';
 import '../models/connection.dart';
+import '../models/service.dart';
 import '../models/session.dart';
+import '../storage/secure_storage.dart';
 
 // Re-export for convenience
 export '../models/connection.dart';
+export '../models/service.dart';
 export '../models/session.dart';
 
-/// Manages saved remote connections using SharedPreferences.
+/// Manages saved remote connections using SharedPreferences for metadata
+/// and [SecureStorage] for secrets (API keys, dashboard credentials).
+///
+/// When [secureStorage] is null (e.g. in unit tests), secrets are stored
+/// alongside metadata in SharedPreferences for backward compatibility.
 class ConnectionManager {
   static const String _key = 'saved_connections';
   static const Uuid _uuid = Uuid();
   final SharedPreferences prefs;
+  final SecureStorage? secureStorage;
 
-  ConnectionManager(this.prefs);
+  ConnectionManager(this.prefs, [this.secureStorage]);
 
+  bool get _useSecureStorage => secureStorage != null;
+
+  /// Returns connections from prefs. When [secureStorage] is active,
+  /// secrets (API key, dashboard username/password) are stripped from the
+  /// prefs map and must be loaded via [getConnectionsWithSecrets].
   List<SavedConnection> getConnections() {
     final jsonList = prefs.getStringList(_key) ?? [];
     return jsonList.map((j) {
       final map = jsonDecode(j) as Map<String, dynamic>;
+      if (_useSecureStorage) {
+        map.remove('api_key');
+        map.remove('dashboard_username');
+        map.remove('dashboard_password');
+      }
       return SavedConnection.fromMap(map);
     }).toList();
   }
 
-  void saveConnection(
+  /// Async version that loads secrets from [SecureStorage] and merges them
+  /// into the returned connections. Use this when you need the full
+  /// connection with API keys (e.g. before navigating to chat).
+  Future<List<SavedConnection>> getConnectionsWithSecrets() async {
+    final connections = getConnections();
+    if (!_useSecureStorage) return connections;
+    final result = <SavedConnection>[];
+    for (final conn in connections) {
+      final apiKey = await secureStorage!.readApiKey(conn.id);
+      final creds = await secureStorage!.readDashboardCredentials(conn.id);
+      result.add(conn.copyWith(
+        apiKey: apiKey ?? '',
+        dashboardUsername: creds.username,
+        dashboardPassword: creds.password,
+      ));
+    }
+    return result;
+  }
+
+  Future<void> saveConnection(
     String label,
     String host,
     int port,
@@ -39,10 +76,11 @@ class ConnectionManager {
     int? dashboardPort,
     String? dashboardUsername,
     String? dashboardPassword,
-  }) {
+  }) async {
     final normalized = SavedConnection.normalizeHostAndPort(host, port);
+    final id = _uuid.v4();
     final conn = SavedConnection(
-      id: _uuid.v4(),
+      id: id,
       label: label,
       host: normalized.host,
       port: normalized.port,
@@ -55,6 +93,14 @@ class ConnectionManager {
       dashboardUsername: dashboardUsername,
       dashboardPassword: dashboardPassword,
     );
+    if (_useSecureStorage) {
+      await secureStorage!.writeConnectionSecrets(
+        connectionId: id,
+        apiKey: apiKey,
+        dashboardUsername: dashboardUsername,
+        dashboardPassword: dashboardPassword,
+      );
+    }
     final current = getConnections();
     current.insert(0, conn);
     _saveAll(current);
@@ -62,7 +108,7 @@ class ConnectionManager {
 
   /// Updates the dashboard port + basic-auth credentials on an existing
   /// connection. Empty strings clear the corresponding field.
-  void updateDashboardAuth(
+  Future<void> updateDashboardAuth(
     String connId, {
     int? dashboardPort,
     required String username,
@@ -70,7 +116,7 @@ class ConnectionManager {
     String? gatewayPrefix,
     String? dashboardPrefix,
     bool? dashboardProxied,
-  }) {
+  }) async {
     final current = getConnections();
     final idx = current.indexWhere((c) => c.id == connId);
     if (idx < 0) return;
@@ -93,25 +139,50 @@ class ConnectionManager {
       dashboardPassword: p.isEmpty ? null : p,
       clearDashboardPassword: p.isEmpty,
     );
+    if (_useSecureStorage) {
+      await secureStorage!.writeConnectionSecrets(
+        connectionId: connId,
+        dashboardUsername: u.isEmpty ? null : u,
+        dashboardPassword: p.isEmpty ? null : p,
+      );
+    }
     _saveAll(current);
   }
 
-  void updateApiKey(String connId, String apiKey) {
+  Future<void> updateApiKey(String connId, String apiKey) async {
     final current = getConnections();
     final idx = current.indexWhere((c) => c.id == connId);
     if (idx < 0) return;
     current[idx] = current[idx].copyWith(apiKey: apiKey);
+    if (_useSecureStorage) {
+      await secureStorage!.write(
+        SecureStorage.apiKeyKey(connId),
+        apiKey,
+      );
+    }
     _saveAll(current);
   }
 
-  void deleteConnection(String id) {
+  Future<void> deleteConnection(String id) async {
+    if (_useSecureStorage) {
+      await secureStorage!.deleteConnectionSecrets(id);
+    }
     final current = getConnections();
     current.removeWhere((c) => c.id == id);
     _saveAll(current);
   }
 
   void _saveAll(List<SavedConnection> list) {
-    prefs.setStringList(_key, list.map((c) => jsonEncode(c.toMap())).toList());
+    final maps = list.map((c) {
+      final map = c.toMap();
+      if (_useSecureStorage) {
+        map.remove('api_key');
+        map.remove('dashboard_username');
+        map.remove('dashboard_password');
+      }
+      return jsonEncode(map);
+    }).toList();
+    prefs.setStringList(_key, maps);
   }
 }
 
@@ -327,6 +398,39 @@ class ApiClient {
       throw Exception('HTTP ${res.statusCode}: ${res.body}');
     }
     return jsonDecode(res.body) as Map<String, dynamic>;
+  }
+
+  // ── Service run SSE log streaming ────────────────────────────────────
+
+  /// Stream real-time logs and progress for a service run via Server-Sent
+  /// Events. The endpoint is `GET /api/service-runs/{runId}/logs` and returns
+  /// SSE frames with event types:
+  ///   - `hermes.service.log`     — a single log line
+  ///   - `hermes.service.step`    — a progress step update
+  ///   - `hermes.service.status`  — a status change (running → completed, etc.)
+  ///
+  /// The stream completes when the service run reaches a terminal state
+  /// (completed, failed, cancelled) or the server closes the connection.
+  ///
+  /// Returns a `ServiceRunStreamController` that can be listened to and
+  /// cancelled.
+  ServiceRunStreamController streamServiceRunLogs(
+    String runId, {
+    required void Function(ServiceRunProgress progress) onProgress,
+    required void Function() onDone,
+    required void Function(String error) onError,
+  }) {
+    return ServiceRunStreamController(
+      ApiClient(
+        baseUrl: baseUrl,
+        apiKey: _apiKey,
+        httpClient: _http,
+      ),
+      runId,
+      onProgress: onProgress,
+      onDone: onDone,
+      onError: onError,
+    );
   }
 
   // ── Questions ────────────────────────────────────────────────────────
@@ -878,4 +982,127 @@ class DashboardClient {
   }
 
   void close() => _http.close();
+}
+
+/// SSE stream controller for service run logs and progress.
+///
+/// Connects to `GET /api/service-runs/{runId}/logs` and parses SSE frames
+/// into [ServiceRunProgress] events. Automatically closes when the run
+/// reaches a terminal status or the server closes the connection.
+class ServiceRunStreamController {
+  final ApiClient _client;
+  final String _runId;
+  final void Function(ServiceRunProgress progress) _onProgress;
+  final void Function() _onDone;
+  final void Function(String error) _onError;
+  http.StreamedResponse? _response;
+  StreamSubscription? _subscription;
+  bool _cancelled = false;
+
+  ServiceRunStreamController(
+    this._client,
+    this._runId, {
+    required void Function(ServiceRunProgress progress) onProgress,
+    required void Function() onDone,
+    required void Function(String error) onError,
+  })  : _onProgress = onProgress,
+        _onDone = onDone,
+        _onError = onError {
+    _connect();
+  }
+
+  Future<void> _connect() async {
+    if (_cancelled) return;
+    try {
+      final request = http.Request(
+        'GET',
+        Uri.parse('${_client.baseUrl}/api/service-runs/$_runId/logs'),
+      );
+      request.headers.addAll({
+        'Authorization': 'Bearer ${_client._apiKey}',
+        'Accept': 'text/event-stream',
+      });
+
+      _response = await _client._http.send(request);
+
+      if (_response!.statusCode != 200) {
+        final errorBody = await _response!.stream.bytesToString();
+        _onError('HTTP ${_response!.statusCode}: $errorBody');
+        _client.close();
+        return;
+      }
+
+      String buffer = '';
+      _subscription = _response!.stream.transform(utf8.decoder).listen(
+        (chunk) {
+          buffer += chunk;
+          while (buffer.contains('\n\n')) {
+            final eventEnd = buffer.indexOf('\n\n');
+            final frame = buffer.substring(0, eventEnd);
+            buffer = buffer.substring(eventEnd + 2);
+            _parseSseFrame(frame);
+          }
+        },
+        onDone: () {
+          if (!_cancelled) {
+            _onDone();
+          }
+          _client.close();
+        },
+        onError: (e) {
+          if (!_cancelled) {
+            _onError(e.toString());
+          }
+          _client.close();
+        },
+      );
+    } catch (e) {
+      if (!_cancelled) {
+        _onError(e.toString());
+      }
+      _client.close();
+    }
+  }
+
+  void _parseSseFrame(String frame) {
+    String eventType = '';
+    final dataLines = <String>[];
+
+    for (final rawLine in frame.split('\n')) {
+      final line = rawLine.trimRight();
+      if (line.isEmpty || line.startsWith(':')) continue;
+      if (line.startsWith('event:')) {
+        eventType = line.substring(6).trim();
+      } else if (line.startsWith('data:')) {
+        dataLines.add(line.substring(5).trimLeft());
+      }
+    }
+
+    if (dataLines.isEmpty) return;
+    final data = dataLines.join('\n').trim();
+    if (data.isEmpty || data == '[DONE]') return;
+
+    try {
+      final parsed = jsonDecode(data);
+      if (parsed is Map<String, dynamic>) {
+        final progress = ServiceRunProgress.fromSseEvent(eventType, parsed);
+        _onProgress(progress);
+        if (progress.isDone) {
+          _cancelled = true;
+          _subscription?.cancel();
+          _onDone();
+          _client.close();
+        }
+      }
+    } catch (_) {
+      // Ignore malformed frames
+    }
+  }
+
+  /// Cancel the stream and clean up resources.
+  void cancel() {
+    _cancelled = true;
+    _subscription?.cancel();
+    _client.close();
+  }
 }

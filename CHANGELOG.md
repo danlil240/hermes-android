@@ -4,6 +4,42 @@ All notable changes to this project are documented here. This project adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html). Release notes for
 versions prior to 1.0.7 are in the **What's new** sections of the [README](README.md).
 
+## [1.0.10]
+
+### Added
+- **SSE log streaming for service runs** — real-time log output via
+  `GET /api/service-runs/{runId}/logs` Server-Sent Events. Falls back to
+  polling if the SSE endpoint is unavailable.
+- **Service run progress steps** — multi-phase operations (pulling code,
+  rebuilding, restarting) now show step-by-step progress indicators on
+  the active run card and in the full-screen log viewer.
+- **Full-screen log viewer** (`ServiceLogViewer`) — terminal-style log
+  output with color-coded lines, progress stepper, status bar, and
+  cancel button. Accessible by tapping an active service run.
+- **iOS Face ID permission** — `NSFaceIDUsageDescription` added to
+  `Info.plist` for biometric authentication support.
+- **Unit tests for `ServiceRunStep` and `ServiceRunProgress`** models,
+  covering SSE event parsing, status transitions, and edge cases.
+
+## [1.0.9]
+
+### Added
+- **Secure API key storage** using `flutter_secure_storage` — API keys and
+  dashboard credentials are now stored in the Android Keystore / iOS Keychain
+  instead of plaintext `SharedPreferences`.
+- **Biometric app lock** — optional fingerprint/face unlock on app startup.
+  Toggle from the Home screen overflow menu. Uses `local_auth`; falls back
+  gracefully on devices without biometrics.
+- **Unit tests for data models** — `ServiceDefinition`, `ServiceRun`,
+  `Question`, and `Session` parsing and edge cases.
+
+### Changed
+- `ConnectionManager` methods (`saveConnection`, `updateApiKey`,
+  `updateDashboardAuth`, `deleteConnection`) are now async to support
+  secure storage writes.
+- `getConnectionsWithSecrets()` async method loads connections with
+  secrets merged from secure storage.
+
 ## [1.0.8]
 
 ### Added

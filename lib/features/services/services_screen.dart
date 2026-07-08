@@ -2,8 +2,8 @@
 // risk-based confirmation flows.
 import 'dart:async';
 import 'package:flutter/material.dart';
-import '../../core/models/service.dart';
 import '../../core/network/connection_manager.dart';
+import 'service_log_viewer.dart';
 
 class ServicesScreen extends StatefulWidget {
   final SavedConnection connection;
@@ -16,7 +16,10 @@ class ServicesScreen extends StatefulWidget {
 class _ServicesScreenState extends State<ServicesScreen> {
   late final ApiClient _client;
   List<ServiceDefinition> _services = [];
-  Map<String, ServiceRun> _activeRuns = {};
+  final Map<String, ServiceRun> _activeRuns = {};
+  final Map<String, ServiceRunStreamController> _streamControllers = {};
+  final Map<String, List<String>> _streamedLogs = {};
+  final Map<String, List<ServiceRunStep>> _streamedSteps = {};
   bool _loading = true;
   String? _error;
 
@@ -33,6 +36,9 @@ class _ServicesScreenState extends State<ServicesScreen> {
 
   @override
   void dispose() {
+    for (final ctrl in _streamControllers.values) {
+      ctrl.cancel();
+    }
     _client.close();
     super.dispose();
   }
@@ -87,7 +93,7 @@ class _ServicesScreenState extends State<ServicesScreen> {
       if (run.isAwaitingConfirmation) {
         _showAwaitingConfirmation(run);
       } else if (run.isRunning) {
-        _pollRunStatus(run.runId);
+        _startLogStream(run);
       } else if (run.isCompleted || run.isFailed) {
         _showRunResult(run);
       }
@@ -220,6 +226,67 @@ class _ServicesScreenState extends State<ServicesScreen> {
     );
   }
 
+  void _startLogStream(ServiceRun run) {
+    _streamedLogs[run.runId] = [];
+    _streamedSteps[run.runId] = [];
+
+    final controller = _client.streamServiceRunLogs(
+      run.runId,
+      onProgress: (progress) {
+        if (!mounted) return;
+        setState(() {
+          if (progress.isLogEvent) {
+            _streamedLogs[run.runId]?.add(progress.logLine!);
+          }
+          if (progress.isStepEvent && progress.step != null) {
+            final steps = _streamedSteps[run.runId] ?? [];
+            final idx = steps.indexWhere((s) => s.id == progress.step!.id);
+            if (idx >= 0) {
+              steps[idx] = progress.step!;
+            } else {
+              steps.add(progress.step!);
+            }
+            _streamedSteps[run.runId] = steps;
+          }
+          if (progress.isStatusEvent && progress.status != null) {
+            _activeRuns[run.runId] = ServiceRun(
+              runId: run.runId,
+              serviceId: run.serviceId,
+              sessionId: run.sessionId,
+              status: progress.status!,
+              riskLevel: run.riskLevel,
+              confirmationRequired: run.confirmationRequired,
+              resultSummary: progress.resultSummary ?? run.resultSummary,
+              startedAt: run.startedAt,
+              completedAt: progress.status == ServiceRunStatus.completed ||
+                      progress.status == ServiceRunStatus.failed ||
+                      progress.status == ServiceRunStatus.cancelled
+                  ? DateTime.now()
+                  : null,
+              confirmedAt: run.confirmedAt,
+              createdAt: run.createdAt,
+            );
+          }
+        });
+      },
+      onDone: () {
+        if (!mounted) return;
+        final updated = _activeRuns[run.runId];
+        if (updated != null && updated.isDone) {
+          _streamControllers.remove(run.runId)?.cancel();
+          _showRunResult(updated);
+        }
+      },
+      onError: (error) {
+        if (!mounted) return;
+        _streamControllers.remove(run.runId)?.cancel();
+        // Fall back to polling if SSE fails
+        _pollRunStatus(run.runId);
+      },
+    );
+    _streamControllers[run.runId] = controller;
+  }
+
   void _pollRunStatus(String runId) {
     Timer.periodic(const Duration(seconds: 3), (timer) async {
       try {
@@ -238,6 +305,22 @@ class _ServicesScreenState extends State<ServicesScreen> {
         timer.cancel();
       }
     });
+  }
+
+  void _openLogViewer(ServiceRun run) {
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (_) => ServiceLogViewer(
+          client: ApiClient(
+            baseUrl: widget.connection.baseUrl,
+            apiKey: widget.connection.apiKey,
+            pathPrefix: widget.connection.gatewayPrefix ?? '',
+          ),
+          run: run,
+        ),
+      ),
+    );
   }
 
   void _showRunResult(ServiceRun run) {
@@ -448,6 +531,9 @@ class _ServicesScreenState extends State<ServicesScreen> {
         .map((r) => _ActiveRunCard(
               run: r,
               riskColor: _riskColor(r.riskLevel),
+              steps: _streamedSteps[r.runId] ?? [],
+              logCount: (_streamedLogs[r.runId] ?? []).length,
+              onTap: () => _openLogViewer(r),
             ))
         .toList();
 
@@ -613,34 +699,46 @@ class _TypedConfirmationFieldState extends State<_TypedConfirmationField> {
   }
 }
 
-/// Card showing an active service run with a progress indicator.
+/// Card showing an active service run with progress steps and log count.
 class _ActiveRunCard extends StatelessWidget {
   final ServiceRun run;
   final Color riskColor;
+  final List<ServiceRunStep> steps;
+  final int logCount;
+  final VoidCallback onTap;
 
-  const _ActiveRunCard({required this.run, required this.riskColor});
+  const _ActiveRunCard({
+    required this.run,
+    required this.riskColor,
+    required this.steps,
+    required this.logCount,
+    required this.onTap,
+  });
 
   @override
   Widget build(BuildContext context) {
     return Card(
       color: riskColor.withValues(alpha: 0.08),
-      child: Padding(
-        padding: const EdgeInsets.all(16),
-        child: Row(
-          children: [
-            const SizedBox(
-              width: 24,
-              height: 24,
-              child: CircularProgressIndicator(strokeWidth: 2),
-            ),
-            const SizedBox(width: 16),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
+      child: InkWell(
+        onTap: onTap,
+        child: Padding(
+          padding: const EdgeInsets.all(16),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
                 children: [
-                  Text(
-                    run.serviceId,
-                    style: Theme.of(context).textTheme.titleSmall,
+                  const SizedBox(
+                    width: 24,
+                    height: 24,
+                    child: CircularProgressIndicator(strokeWidth: 2),
+                  ),
+                  const SizedBox(width: 16),
+                  Expanded(
+                    child: Text(
+                      run.serviceId,
+                      style: Theme.of(context).textTheme.titleSmall,
+                    ),
                   ),
                   Text(
                     'Status: ${run.status.name}',
@@ -648,9 +746,72 @@ class _ActiveRunCard extends StatelessWidget {
                   ),
                 ],
               ),
-            ),
-          ],
+              if (steps.isNotEmpty) ...[
+                const SizedBox(height: 12),
+                ...steps.map((step) => _buildStepIndicator(context, step)),
+              ],
+              const SizedBox(height: 8),
+              Row(
+                children: [
+                  Icon(Icons.terminal, size: 14, color: Colors.grey[600]),
+                  const SizedBox(width: 4),
+                  Text(
+                    '$logCount log lines',
+                    style: TextStyle(
+                      fontSize: 12,
+                      color: Colors.grey[600],
+                    ),
+                  ),
+                  const Spacer(),
+                  Text(
+                    'Tap to view logs',
+                    style: TextStyle(
+                      fontSize: 12,
+                      color: riskColor,
+                      fontWeight: FontWeight.bold,
+                    ),
+                  ),
+                ],
+              ),
+            ],
+          ),
         ),
+      ),
+    );
+  }
+
+  Widget _buildStepIndicator(BuildContext context, ServiceRunStep step) {
+    IconData icon;
+    Color color;
+    if (step.isCompleted) {
+      icon = Icons.check_circle;
+      color = Colors.green;
+    } else if (step.isRunning) {
+      icon = Icons.sync;
+      color = Colors.blue;
+    } else if (step.isFailed) {
+      icon = Icons.error;
+      color = Colors.red;
+    } else {
+      icon = Icons.radio_button_unchecked;
+      color = Colors.grey;
+    }
+
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 2),
+      child: Row(
+        children: [
+          if (step.isRunning)
+            SizedBox(
+              width: 14,
+              height: 14,
+              child: CircularProgressIndicator(strokeWidth: 2, color: color),
+            )
+          else
+            Icon(icon, size: 14, color: color),
+          const SizedBox(width: 8),
+          Text(step.label, style: const TextStyle(fontSize: 13)),
+        ],
       ),
     );
   }

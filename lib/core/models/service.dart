@@ -1,6 +1,6 @@
-/// Service models for the Hermes Services Runner.
-///
-/// Represents service manifests, service runs, and risk levels per the plan.
+// Service models for the Hermes Services Runner.
+//
+// Represents service manifests, service runs, and risk levels per the plan.
 
 enum ServiceRiskLevel { low, medium, high, critical, unknown }
 
@@ -186,4 +186,107 @@ class ServiceRun {
     final end = completedAt ?? DateTime.now();
     return end.difference(startedAt!);
   }
+}
+
+/// A single step in a multi-phase service run (e.g. "pulling code",
+/// "rebuilding", "restarting").
+class ServiceRunStep {
+  final String id;
+  final String label;
+  final String? status;
+  final String? detail;
+  final DateTime? startedAt;
+  final DateTime? completedAt;
+
+  const ServiceRunStep({
+    required this.id,
+    required this.label,
+    this.status,
+    this.detail,
+    this.startedAt,
+    this.completedAt,
+  });
+
+  factory ServiceRunStep.fromJson(Map<String, dynamic> json) {
+    DateTime? parseTs(dynamic v) {
+      if (v == null) return null;
+      return DateTime.tryParse(v.toString());
+    }
+    return ServiceRunStep(
+      id: json['id']?.toString() ?? '',
+      label: json['label']?.toString() ?? '',
+      status: json['status']?.toString(),
+      detail: json['detail']?.toString(),
+      startedAt: parseTs(json['started_at']),
+      completedAt: parseTs(json['completed_at']),
+    );
+  }
+
+  bool get isCompleted => status == 'completed';
+  bool get isRunning => status == 'running';
+  bool get isPending => status == null || status == 'pending';
+  bool get isFailed => status == 'failed';
+}
+
+/// Progress event received via SSE during a service run.
+class ServiceRunProgress {
+  final String runId;
+  final String? logLine;
+  final ServiceRunStep? step;
+  final ServiceRunStatus? status;
+  final String? resultSummary;
+  final String? error;
+
+  const ServiceRunProgress({
+    required this.runId,
+    this.logLine,
+    this.step,
+    this.status,
+    this.resultSummary,
+    this.error,
+  });
+
+  factory ServiceRunProgress.fromSseEvent(
+    String eventType,
+    Map<String, dynamic> data,
+  ) {
+    ServiceRunStatus? parseStatus(String? s) {
+      switch (s) {
+        case 'pending':
+          return ServiceRunStatus.pending;
+        case 'awaiting_confirmation':
+          return ServiceRunStatus.awaitingConfirmation;
+        case 'running':
+          return ServiceRunStatus.running;
+        case 'completed':
+          return ServiceRunStatus.completed;
+        case 'failed':
+          return ServiceRunStatus.failed;
+        case 'cancelled':
+          return ServiceRunStatus.cancelled;
+        default:
+          return null;
+      }
+    }
+
+    final stepJson = data['step'];
+    return ServiceRunProgress(
+      runId: data['run_id']?.toString() ?? data['id']?.toString() ?? '',
+      logLine: data['log']?.toString() ?? data['line']?.toString(),
+      step: stepJson is Map<String, dynamic>
+          ? ServiceRunStep.fromJson(stepJson)
+          : null,
+      status: parseStatus(data['status']?.toString()),
+      resultSummary: data['result_summary']?.toString(),
+      error: data['error']?.toString(),
+    );
+  }
+
+  bool get isLogEvent => logLine != null && logLine!.isNotEmpty;
+  bool get isStepEvent => step != null;
+  bool get isStatusEvent => status != null;
+  bool get isDone =>
+      status == ServiceRunStatus.completed ||
+      status == ServiceRunStatus.failed ||
+      status == ServiceRunStatus.cancelled;
 }

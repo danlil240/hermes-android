@@ -492,7 +492,7 @@ void main() {
     test('saveConnection persists dashboard port and credentials', () async {
       final prefs = await SharedPreferences.getInstance();
       final mgr = ConnectionManager(prefs);
-      mgr.saveConnection(
+      await mgr.saveConnection(
         'Home',
         '192.168.1.50',
         8642,
@@ -511,10 +511,10 @@ void main() {
     test('updateDashboardAuth sets then clears fields', () async {
       final prefs = await SharedPreferences.getInstance();
       final mgr = ConnectionManager(prefs);
-      mgr.saveConnection('Home', '192.168.1.50', 8642, 'key');
+      await mgr.saveConnection('Home', '192.168.1.50', 8642, 'key');
       final id = mgr.getConnections().single.id;
 
-      mgr.updateDashboardAuth(
+      await mgr.updateDashboardAuth(
         id,
         gatewayPrefix: '/profile/peter',
         dashboardPrefix: '/dashboard',
@@ -532,7 +532,7 @@ void main() {
       expect(conn.dashboardPassword, 'secret');
 
       // Blank values clear the corresponding fields.
-      mgr.updateDashboardAuth(
+      await mgr.updateDashboardAuth(
         id,
         gatewayPrefix: '',
         dashboardPrefix: '',
@@ -552,7 +552,7 @@ void main() {
     test('updateApiKey preserves dashboard credentials', () async {
       final prefs = await SharedPreferences.getInstance();
       final mgr = ConnectionManager(prefs);
-      mgr.saveConnection(
+      await mgr.saveConnection(
         'Home',
         '192.168.1.50',
         8642,
@@ -563,7 +563,7 @@ void main() {
       );
       final id = mgr.getConnections().single.id;
 
-      mgr.updateApiKey(id, 'new-key');
+      await mgr.updateApiKey(id, 'new-key');
       final conn = mgr.getConnections().single;
       expect(conn.apiKey, 'new-key');
       expect(conn.dashboardPortOverride, 30433);
