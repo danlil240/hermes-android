@@ -327,6 +327,24 @@ void main() {
       expect(progress!['toolCallId'], 'call_1');
       expect(progress!['status'], 'running');
     });
+
+    test('parses Hermes question SSE frames via callback', () {
+      Map<String, dynamic>? question;
+      final token = GatewayChatClient.parseSseFrame(
+        'event: hermes.question\n'
+        'data: {"type":"choice_question","question_id":"q_001",'
+        '"session_id":"s_123","title":"What should I update?","mode":"single",'
+        '"options":[{"id":"hermes","label":"Hermes only"}]}',
+        onQuestion: (q) => question = q,
+      );
+
+      expect(token, isNull);
+      expect(question, isNotNull);
+      expect(question!['type'], 'choice_question');
+      expect(question!['question_id'], 'q_001');
+      expect(question!['title'], 'What should I update?');
+      expect(question!['mode'], 'single');
+    });
   });
 
   group('DashboardClient', () {

@@ -331,6 +331,25 @@ class ApiClient {
 
   // ── Questions ────────────────────────────────────────────────────────
 
+  Future<List<Map<String, dynamic>>> getSessionQuestions(
+    String sessionId,
+  ) async {
+    final res = await _http.get(
+      Uri.parse('$baseUrl/api/sessions/$sessionId/questions'),
+      headers: _headers,
+    );
+    if (res.statusCode != 200) return [];
+    final data = jsonDecode(res.body);
+    if (data is List) {
+      return data.whereType<Map<String, dynamic>>().toList();
+    }
+    if (data is Map<String, dynamic>) {
+      final list = data['data'] as List? ?? [];
+      return list.whereType<Map<String, dynamic>>().toList();
+    }
+    return [];
+  }
+
   Future<Map<String, dynamic>> getQuestion(String questionId) async {
     final res = await _http.get(
       Uri.parse('$baseUrl/api/questions/$questionId'),
@@ -378,6 +397,8 @@ class ApiClient {
 
 typedef ToolProgressCallback = void Function(Map<String, dynamic> progress);
 
+typedef QuestionCallback = void Function(Map<String, dynamic> question);
+
 /// SSE streaming chat client for the Gateway API Server.
 class GatewayChatClient {
   final ApiClient _api;
@@ -424,6 +445,7 @@ class GatewayChatClient {
   static String? parseSseFrame(
     String frame, {
     ToolProgressCallback? onToolProgress,
+    QuestionCallback? onQuestion,
   }) {
     String eventType = '';
     final dataLines = <String>[];
@@ -446,6 +468,10 @@ class GatewayChatClient {
       final parsed = jsonDecode(data);
       if (eventType == 'hermes.tool.progress') {
         if (parsed is Map<String, dynamic>) onToolProgress?.call(parsed);
+        return null;
+      }
+      if (eventType == 'hermes.question') {
+        if (parsed is Map<String, dynamic>) onQuestion?.call(parsed);
         return null;
       }
 
@@ -476,6 +502,7 @@ class GatewayChatClient {
     List<Map<String, dynamic>>? history,
     required void Function(String token) onToken,
     ToolProgressCallback? onToolProgress,
+    QuestionCallback? onQuestion,
     required void Function() onDone,
     required void Function(String error) onError,
   }) async {
@@ -526,7 +553,11 @@ class GatewayChatClient {
           final frame = buffer.substring(0, eventEnd);
           buffer = buffer.substring(eventEnd + 2);
 
-          final token = parseSseFrame(frame, onToolProgress: onToolProgress);
+          final token = parseSseFrame(
+            frame,
+            onToolProgress: onToolProgress,
+            onQuestion: onQuestion,
+          );
           if (token != null && token.isNotEmpty) onToken(token);
         }
       });

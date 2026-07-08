@@ -9,7 +9,9 @@ import 'package:speech_to_text/speech_recognition_error.dart';
 import 'package:speech_to_text/speech_recognition_result.dart';
 import 'package:speech_to_text/speech_to_text.dart';
 
+import '../../core/models/question.dart';
 import '../../core/network/connection_manager.dart';
+import '../questions/question_widgets.dart';
 import '../../shared/responsive.dart';
 
 class ChatScreen extends StatefulWidget {
@@ -51,6 +53,9 @@ class _ChatScreenState extends State<ChatScreen> {
 
   // Verbose mode
   bool _verboseMode = false;
+
+  // Active questions for this session (from SSE events or message history)
+  final List<Question> _activeQuestions = [];
 
   // Scroll management
   final _scrollController = ScrollController();
@@ -245,6 +250,9 @@ class _ChatScreenState extends State<ChatScreen> {
       final messages = await _client.getMessages(widget.session.id);
       if (!mounted) return;
       _extractToolMessages(messages);
+      _extractQuestionBlocks(messages);
+      await _fetchSessionQuestions();
+      if (!mounted) return;
       setState(() {
         _messages = messages;
         _loading = false;
@@ -341,6 +349,96 @@ class _ChatScreenState extends State<ChatScreen> {
     }
   }
 
+  /// Extract question blocks from message history.
+  ///
+  /// The Gateway may embed question blocks in messages using:
+  /// - A `type` field (e.g. `choice_question`, `confirmation_question`)
+  /// - A `question` field containing the question payload
+  /// - A `blocks` array containing typed blocks
+  void _extractQuestionBlocks(List<Map<String, dynamic>> messages) {
+    for (final msg in messages) {
+      final type = (msg['type'] as String?) ?? '';
+      if (_isQuestionType(type)) {
+        _upsertQuestion(Question.fromJson(msg));
+        continue;
+      }
+      final questionField = msg['question'];
+      if (questionField is Map<String, dynamic>) {
+        _upsertQuestion(Question.fromJson(questionField));
+        continue;
+      }
+      final blocks = msg['blocks'];
+      if (blocks is List) {
+        for (final block in blocks) {
+          if (block is Map<String, dynamic>) {
+            final blockType = (block['type'] as String?) ?? '';
+            if (_isQuestionType(blockType)) {
+              _upsertQuestion(Question.fromJson(block));
+            }
+          }
+        }
+      }
+    }
+  }
+
+  bool _isQuestionType(String type) {
+    return type == 'choice_question' ||
+        type == 'confirmation_question' ||
+        type == 'text_input_question' ||
+        type == 'number_question' ||
+        type == 'date_time_question';
+  }
+
+  /// Fetch pending questions for this session from the API.
+  Future<void> _fetchSessionQuestions() async {
+    try {
+      final rawQuestions = await _client.getSessionQuestions(widget.session.id);
+      for (final q in rawQuestions) {
+        _upsertQuestion(Question.fromJson(q));
+      }
+    } catch (_) {
+      // Session questions endpoint may not exist on all backends — ignore.
+    }
+  }
+
+  void _upsertQuestion(Question question) {
+    final idx = _activeQuestions.indexWhere((q) => q.id == question.id);
+    if (idx >= 0) {
+      _activeQuestions[idx] = question;
+    } else {
+      _activeQuestions.add(question);
+    }
+  }
+
+  /// Handle a hermes.question SSE event during streaming.
+  void _handleQuestionSseEvent(Map<String, dynamic> data) {
+    if (!mounted) return;
+    final question = Question.fromJson(data);
+    setState(() => _upsertQuestion(question));
+    WidgetsBinding.instance.addPostFrameCallback((_) => _scrollToBottom());
+  }
+
+  /// Answer a question and update its state.
+  Future<void> _handleQuestionAnswer(
+    String questionId,
+    Map<String, dynamic> answer,
+  ) async {
+    try {
+      final result = await _client.answerQuestion(questionId, answer);
+      if (!mounted) return;
+      final updated = Question.fromJson(result);
+      setState(() => _upsertQuestion(updated));
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Failed to answer question: $e'),
+          backgroundColor: Colors.orange,
+        ),
+      );
+    }
+  }
+
   /// Send message via SSE streaming (Gateway API Server).
   Future<void> _sendMessage({bool speakResponse = false}) async {
     final text = _textController.text.trim();
@@ -386,6 +484,9 @@ class _ChatScreenState extends State<ChatScreen> {
         if (!mounted) return;
         _upsertToolProgress(progress);
       },
+      onQuestion: (data) {
+        _handleQuestionSseEvent(data);
+      },
       onDone: () async {
         if (!mounted) return;
         // Refresh messages to get the final server-side state
@@ -393,6 +494,9 @@ class _ChatScreenState extends State<ChatScreen> {
           final messages = await _client.getMessages(widget.session.id);
           if (!mounted) return;
           _extractToolMessages(messages);
+          _extractQuestionBlocks(messages);
+          await _fetchSessionQuestions();
+          if (!mounted) return;
           setState(() {
             _messages = messages;
             _streaming = false;
@@ -706,6 +810,12 @@ class _ChatScreenState extends State<ChatScreen> {
       displayMessages.add(toolQueue.toList());
     }
 
+    // Append pending question cards after messages
+    final pendingQuestions = _activeQuestions.where((q) => q.isPending).toList();
+    for (final q in pendingQuestions) {
+      displayMessages.add(q);
+    }
+
     return ListView.builder(
       controller: _scrollController,
       padding: const EdgeInsets.only(bottom: 4),
@@ -715,6 +825,14 @@ class _ChatScreenState extends State<ChatScreen> {
 
         if (item is List<Map<String, dynamic>>) {
           return _ToolProgressCard(items: item, verbose: _verboseMode);
+        }
+
+        if (item is Question) {
+          return QuestionCard(
+            question: item,
+            onAnswer: _handleQuestionAnswer,
+            enabled: !_streaming,
+          );
         }
 
         final msg = item as Map<String, dynamic>;
