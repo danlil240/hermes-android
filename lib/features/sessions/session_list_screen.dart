@@ -6,6 +6,8 @@ import '../settings/settings_screen.dart';
 import '../memory/memory_screen.dart';
 import '../cron/cron_screen.dart';
 import '../skills/skills_screen.dart';
+import '../diagnostics/diagnostics_screen.dart';
+import '../services/services_screen.dart';
 
 class SessionListScreen extends StatefulWidget {
   final SavedConnection connection;
@@ -184,6 +186,19 @@ class _SessionListScreenState extends State<SessionListScreen> {
               title: const Text('Skills'),
               onTap: () =>
                   _openScreen(SkillsScreen(connection: widget.connection)),
+            ),
+            const Divider(),
+            ListTile(
+              leading: const Icon(Icons.dns),
+              title: const Text('Diagnostics'),
+              onTap: () => _openScreen(
+                  DiagnosticsScreen(connection: widget.connection)),
+            ),
+            ListTile(
+              leading: const Icon(Icons.build),
+              title: const Text('Services'),
+              onTap: () =>
+                  _openScreen(ServicesScreen(connection: widget.connection)),
             ),
             const Divider(),
             ListTile(

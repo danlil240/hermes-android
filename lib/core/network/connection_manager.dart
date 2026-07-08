@@ -256,6 +256,105 @@ class ApiClient {
     }
   }
 
+  // ── Diagnostics ──────────────────────────────────────────────────────
+
+  /// Fetches `/status` from the Gateway API for diagnostics.
+  Future<Map<String, dynamic>> getStatus() async {
+    final res = await _http.get(
+      Uri.parse('$baseUrl/status'),
+      headers: _headers,
+    );
+    if (res.statusCode != 200) throw Exception('HTTP ${res.statusCode}');
+    return jsonDecode(res.body) as Map<String, dynamic>;
+  }
+
+  // ── Services ─────────────────────────────────────────────────────────
+
+  Future<List<Map<String, dynamic>>> getServices() async {
+    final res = await _http.get(
+      Uri.parse('$baseUrl/api/services'),
+      headers: _headers,
+    );
+    if (res.statusCode != 200) throw Exception('HTTP ${res.statusCode}');
+    final data = jsonDecode(res.body);
+    if (data is List) {
+      return data.whereType<Map<String, dynamic>>().toList();
+    }
+    if (data is Map<String, dynamic>) {
+      final list = data['data'] as List? ?? [];
+      return list.whereType<Map<String, dynamic>>().toList();
+    }
+    return [];
+  }
+
+  Future<Map<String, dynamic>> runService(String serviceId) async {
+    final res = await _http.post(
+      Uri.parse('$baseUrl/api/services/$serviceId/run'),
+      headers: _headers,
+    );
+    if (res.statusCode < 200 || res.statusCode >= 300) {
+      throw Exception('HTTP ${res.statusCode}: ${res.body}');
+    }
+    return jsonDecode(res.body) as Map<String, dynamic>;
+  }
+
+  Future<Map<String, dynamic>> getServiceRun(String runId) async {
+    final res = await _http.get(
+      Uri.parse('$baseUrl/api/service-runs/$runId'),
+      headers: _headers,
+    );
+    if (res.statusCode != 200) throw Exception('HTTP ${res.statusCode}');
+    return jsonDecode(res.body) as Map<String, dynamic>;
+  }
+
+  Future<Map<String, dynamic>> confirmServiceRun(String runId) async {
+    final res = await _http.post(
+      Uri.parse('$baseUrl/api/service-runs/$runId/confirm'),
+      headers: _headers,
+    );
+    if (res.statusCode < 200 || res.statusCode >= 300) {
+      throw Exception('HTTP ${res.statusCode}: ${res.body}');
+    }
+    return jsonDecode(res.body) as Map<String, dynamic>;
+  }
+
+  Future<Map<String, dynamic>> cancelServiceRun(String runId) async {
+    final res = await _http.post(
+      Uri.parse('$baseUrl/api/service-runs/$runId/cancel'),
+      headers: _headers,
+    );
+    if (res.statusCode < 200 || res.statusCode >= 300) {
+      throw Exception('HTTP ${res.statusCode}: ${res.body}');
+    }
+    return jsonDecode(res.body) as Map<String, dynamic>;
+  }
+
+  // ── Questions ────────────────────────────────────────────────────────
+
+  Future<Map<String, dynamic>> getQuestion(String questionId) async {
+    final res = await _http.get(
+      Uri.parse('$baseUrl/api/questions/$questionId'),
+      headers: _headers,
+    );
+    if (res.statusCode != 200) throw Exception('HTTP ${res.statusCode}');
+    return jsonDecode(res.body) as Map<String, dynamic>;
+  }
+
+  Future<Map<String, dynamic>> answerQuestion(
+    String questionId,
+    Map<String, dynamic> answer,
+  ) async {
+    final res = await _http.post(
+      Uri.parse('$baseUrl/api/questions/$questionId/answer'),
+      headers: _headers,
+      body: jsonEncode(answer),
+    );
+    if (res.statusCode < 200 || res.statusCode >= 300) {
+      throw Exception('HTTP ${res.statusCode}: ${res.body}');
+    }
+    return jsonDecode(res.body) as Map<String, dynamic>;
+  }
+
   // ── Dashboard-compatible helpers (port 9119 endpoints, may not work on API server) ──
 
   Future<Map<String, dynamic>> getModelInfo() => apiGet('api/model/info');
