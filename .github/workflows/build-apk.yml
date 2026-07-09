@@ -41,6 +41,17 @@ jobs:
       - name: Install dependencies
         run: flutter pub get
 
+      - name: Verify tag matches pubspec version
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: |
+          PUBSPEC_VERSION=$(grep '^version:' pubspec.yaml | awk '{print $2}' | cut -d '+' -f 1)
+          TAG_VERSION="${GITHUB_REF_NAME#v}"
+          echo "pubspec: $PUBSPEC_VERSION  tag: $TAG_VERSION"
+          if [ "$PUBSPEC_VERSION" != "$TAG_VERSION" ]; then
+            echo "ERROR: pubspec version ($PUBSPEC_VERSION) != tag ($TAG_VERSION)"
+            exit 1
+          fi
+
       - name: Set up release keystore
         env:
           KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
