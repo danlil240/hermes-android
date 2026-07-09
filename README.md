@@ -4,11 +4,23 @@ Android client for [Hermes Agent](https://hermes-agent.nousresearch.com/) — ch
 
 ## Current release
 
-- Version: **1.0.8**
+- Version: **1.0.10**
 - Package: `com.hermesagent.hermes_android`
 - Recommended APK for most modern phones: `app-arm64-v8a-release.apk`
 - Other APKs: `app-armeabi-v7a-release.apk`, `app-x86_64-release.apk`
-- Download: [GitHub Releases](https://github.com/rusty4444/hermes-android/releases/latest)
+- Download: [GitHub Releases](https://github.com/danlil240/hermes-android/releases/latest)
+
+## What's new in v1.0.10
+
+- **SSE log streaming for service runs** — real-time log output via `GET /api/service-runs/{runId}/logs` Server-Sent Events. Falls back to polling if the SSE endpoint is unavailable.
+- **Service run progress steps** — multi-phase operations (pulling code, rebuilding, restarting) now show step-by-step progress indicators on the active run card and in the full-screen log viewer.
+- **Full-screen log viewer** (`ServiceLogViewer`) — terminal-style log output with color-coded lines, progress stepper, status bar, and cancel button. Accessible by tapping an active service run.
+- **iOS Face ID permission** — `NSFaceIDUsageDescription` added to `Info.plist` for biometric authentication support.
+
+## What's new in v1.0.9
+
+- **Secure API key storage** using `flutter_secure_storage` — API keys and dashboard credentials are now stored in the Android Keystore / iOS Keychain instead of plaintext `SharedPreferences`.
+- **Biometric app lock** — optional fingerprint/face unlock on app startup. Toggle from the Home screen overflow menu. Uses `local_auth`; falls back gracefully on devices without biometrics.
 
 ## What's new in v1.0.8
 
@@ -44,6 +56,15 @@ Android client for [Hermes Agent](https://hermes-agent.nousresearch.com/) — ch
 - **Three-way theme toggle** — Dark / Light / System default.
 - **Keyboard handling** — auto-scroll on keyboard open, send action on Enter, FAB to scroll to bottom.
 - **Voice chat** — microphone dictation sends recognised speech to Hermes, with optional text-to-speech replies.
+- **Biometric app lock** — optional fingerprint/face unlock on app startup, with graceful fallback on devices without biometrics.
+- **Secure credential storage** — API keys and dashboard credentials stored in Android Keystore / iOS Keychain via `flutter_secure_storage`.
+- **Services screen** — run predefined Hermes services (restart, update, status, logs) with risk-based confirmation and real-time SSE log streaming.
+- **Diagnostics screen** — view Hermes stack health (gateway, agent, tunnel, model server, database) with auto-refresh.
+- **Structured LLM questions** — the agent can ask single-choice, multiple-choice, confirmation, text-input, number, and date-time questions during a chat, rendered as interactive cards.
+- **Session management** — swipe-to-delete with confirmation, rename sessions, search/filter by title, model, or preview.
+- **Session export/share** — share a chat transcript as Markdown via the system share sheet.
+- **Markdown code highlighting** — syntax-highlighted code blocks in chat with dark/light theme support.
+- **Cloudflare Access service tokens** — `CF-Access-Client-Id` and `CF-Access-Client-Secret` headers sent on every request when configured, for tunnels protected by Cloudflare Access.
 
 ## Screenshots
 
@@ -78,7 +99,7 @@ Hermes Agent docs: <https://hermes-agent.nousresearch.com/docs>
 
 ### Install the APK
 
-Download the latest APK from the [GitHub Releases](https://github.com/rusty4444/hermes-android/releases/latest) page.
+Download the latest APK from the [GitHub Releases](https://github.com/danlil240/hermes-android/releases/latest) page.
 
 For most Android phones, install the arm64 APK:
 
@@ -587,12 +608,15 @@ Every release PR must complete [`CODE_QUALITY_CHECKLIST.md`](CODE_QUALITY_CHECKL
 
 Minimum release flow:
 
-1. Update `pubspec.yaml` version.
-2. Complete `CODE_QUALITY_CHECKLIST.md` and record any exceptions in the release PR.
-3. Build split release APKs.
-4. Tag the release, e.g. `v1.0.0`.
-5. Create a GitHub Release with all APK assets.
-6. Confirm the repository visibility and release assets on GitHub.
+1. Update `pubspec.yaml` version (`version: X.Y.Z+versionCode`).
+2. Update `CHANGELOG.md` with a new `## [X.Y.Z]` section.
+3. Complete `CODE_QUALITY_CHECKLIST.md` and record any exceptions in the release PR.
+4. Commit: `git commit -m "release: vX.Y.Z"`.
+5. Tag: `git tag vX.Y.Z`.
+6. Push: `git push origin HEAD --tags` — this triggers the CI workflow (`.github/workflows/build-apk.yml`) which builds signed APKs and creates a GitHub Release automatically.
+7. Verify the CI build passed and APKs are attached to the release.
+
+See `.windsurf/workflows/release.md` for the full release workflow, including hotfix and pre-release/beta procedures.
 
 ## Troubleshooting
 
