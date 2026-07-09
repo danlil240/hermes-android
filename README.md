@@ -1,6 +1,28 @@
 # Hermes Android
 
-Android client for [Hermes Agent](https://hermes-agent.nousresearch.com/) — chat with your Hermes sessions from a phone or tablet over local Wi-Fi, a private Tailscale network, or a Cloudflare Tunnel.
+Chat with your Hermes Agent from your phone or tablet — at home or anywhere in the world.
+
+The app connects to your Hermes server over your home Wi-Fi, a private Tailscale network, or a secure Cloudflare Tunnel. No complicated setup, no router changes, no open ports.
+
+---
+
+## New here? Start here.
+
+**You need three things to use this app:**
+
+1. **The Hermes app on your phone** — download and install it (see below).
+2. **A Hermes server running on your computer** — this is the AI agent you'll chat with.
+3. **A way for your phone to reach your computer** — pick one:
+
+| Method | Best for | What you need |
+|--------|----------|---------------|
+| **Home Wi-Fi** | At home, same network | Your computer's IP address |
+| **Tailscale** | Away from home, private | Free Tailscale account on both devices |
+| **Cloudflare Tunnel** | Away from home, public URL | A domain name + Cloudflare account |
+
+> **Not sure which to pick?** If you only use the app at home, use **Home Wi-Fi**. If you want to chat from anywhere without a VPN, use **Cloudflare Tunnel**. If you already use Tailscale, use that.
+
+---
 
 ## Current release
 
@@ -84,127 +106,90 @@ Android client for [Hermes Agent](https://hermes-agent.nousresearch.com/) — ch
   </tr>
 </table>
 
-## Quick start
+## Install the app
 
-### Prerequisites
+1. Download the latest APK from the [GitHub Releases](https://github.com/danlil240/hermes-android/releases/latest) page.
+2. For most Android phones, choose **`app-arm64-v8a-release.apk`**.
+3. Open the downloaded file on your phone. If asked, allow your browser or file manager to **install unknown apps**.
+4. Once installed, open **Hermes** from your app drawer.
 
-- Android device or emulator (Android 8+).
-- Hermes Agent installed on the host machine.
-- Hermes Gateway API Server reachable from the Android device — via LAN, Tailscale, or Cloudflare Tunnel.
-- `API_SERVER_KEY` from the Hermes host environment (`~/.hermes/.env`).
-- Optional: Hermes dashboard reachable for Memory/Cron/Skills/Settings screens.
-- For development: Flutter SDK, Android Studio (or Android SDK + command-line tools).
+> **Using `adb`?** `adb install app-arm64-v8a-release.apk`
 
-Hermes Agent docs: <https://hermes-agent.nousresearch.com/docs>
+---
 
-### Install the APK
+## Method 1: Connect over Home Wi-Fi
 
-Download the latest APK from the [GitHub Releases](https://github.com/danlil240/hermes-android/releases/latest) page.
+Use this if your phone and Hermes computer are on the same Wi-Fi network.
 
-For most Android phones, install the arm64 APK:
+### What you need
 
-```bash
-adb install app-arm64-v8a-release.apk
-```
+- Your Hermes server running on your computer
+- Your computer's IP address on the home network (e.g. `192.168.1.50`)
+- The API key from your Hermes setup (found in `~/.hermes/.env` on your computer)
 
-If sideloading directly on Android, enable **Install unknown apps** for your browser or file manager, then open the downloaded APK.
+### Step 1: Find your computer's IP address
 
-### 1. Start the Gateway API Server
-
-The Android chat/session features connect to the Hermes Gateway API Server. It must bind to an address your phone can reach, not only `127.0.0.1`.
-
-Use your normal Hermes gateway/API-server startup command and confirm:
-
-- host/IP is reachable from Android
-- port is usually `8642`
-- `API_SERVER_KEY` is available in `~/.hermes/.env`
-
-### 2. Optional: start the dashboard for drawer features
-
-Memory, Cron Jobs, Skills, and Settings use the Hermes dashboard API (default port `9119`).
-
-Open dashboard (no login):
+On your Hermes computer, open a terminal and run:
 
 ```bash
-hermes dashboard --insecure --host 0.0.0.0 --tui --port 9119
+# macOS
+ipconfig getifaddr en0
+
+# Linux
+hostname -I | awk '{print $1}'
 ```
 
-Password-protected dashboard (recommended on shared networks) — start it with a
-basic-auth provider instead of `--insecure`, then enter the username/password in
-the app's **Dashboard / Proxy Settings** dialog (see [Dashboard access](#4-optional-configure-dashboard-access)).
+Note down the IP address it shows (e.g. `192.168.1.50`).
 
-> `--host 0.0.0.0` is required when connecting from another device. A localhost-only dashboard cannot be reached from Android.
+### Step 2: Make sure Hermes is reachable
 
-### 3. Connect the app
+Your Hermes Gateway API Server needs to be running and reachable from other devices on the network (not just `localhost`). The default port is `8642`.
 
-1. Put the Android device and Hermes host on the same Wi-Fi/LAN (or connect via Tailscale — see below).
-2. Find the Hermes host IP:
+### Step 3: Add the connection in the app
 
-   ```bash
-   # macOS
-   ipconfig getifaddr en0
+1. Open the Hermes app on your phone.
+2. Tap the **+** button (bottom right).
+3. Fill in the fields:
 
-   # Linux
-   hostname -I | awk '{print $1}'
-   ```
+   | Field | What to type |
+   |-------|-------------|
+   | **Label** | Any name you like, e.g. `Home` |
+   | **Host** | Your computer's IP, e.g. `192.168.1.50` |
+   | **Port** | `8642` (already filled in — leave as is) |
+   | **API Key** | The API key from your Hermes computer |
 
-3. Open the Hermes Android app.
-4. Tap **+** to add a connection.
-5. Enter:
-   - **Label:** any name, e.g. `Home`
-   - **Host:** the host IP, e.g. `192.168.1.50`
-   - **Port:** `8642`
-   - **API Key:** `API_SERVER_KEY` from the Hermes machine
-6. If your deployment is behind a reverse proxy path, expand **Custom proxy and dashboard details** and set the gateway/dashboard prefixes there. Do not put URL paths in the Host field; the Host field is just the scheme, hostname, and optional port.
-7. Tap the saved connection to browse sessions.
-8. Tap a session to start chatting, or create a new one.
+4. Tap **Connect**. The app will test the connection and save it.
+5. Tap your new connection to start chatting!
 
-### 4. Optional: configure dashboard access
+### Optional: Dashboard features (Memory, Cron, Skills, Settings)
 
-The drawer screens (Memory, Cron Jobs, Skills, Settings) talk to the Hermes
-dashboard, which can run on a different port from the Gateway API Server and may
-be password-protected. Configure it per connection — either while adding the
-connection (expand **Custom proxy and dashboard details** in the Add Connection dialog) or
-afterwards:
+The chat works with just the Gateway API. For the extra drawer features (Memory, Cron Jobs, Skills, Settings), you also need the Hermes dashboard running on port `9119`.
 
-1. On the connections list, tap the **⋮** menu on a connection → **Dashboard / Proxy Settings**.
-2. Fill in:
-   - **Gateway path prefix** — optional reverse-proxy path before gateway `/api`
-     and `/v1` routes, e.g. `/profile/peter`.
-   - **Dashboard path prefix** — optional reverse-proxy path before dashboard
-     `/api` routes, e.g. `/dashboard`.
-   - **Dashboard behind proxy** — enable this when the proxy injects dashboard
-     authentication and the app should not fetch a dashboard SPA token or log in
-     with username/password.
-   - **Dashboard Port** — leave blank to use the default (`9119` for HTTP, or the
-     same external port for HTTPS deployments), or set an explicit port if your
-     dashboard is exposed elsewhere.
-   - **Username / Password** — only for a password-protected dashboard. Leave
-     both blank for an open (`--insecure`) dashboard.
-3. Tap **Save**. The app validates the settings against the dashboard before
-   storing them.
+If your dashboard is **password-protected**, tap the **⋮** menu next to your connection → **Dashboard / Proxy Settings**, and enter the username and password there.
 
-When credentials are set, the app authenticates via the dashboard's
-`/auth/password-login` flow and reuses the returned session cookie — the same
-mechanism the Hermes desktop client uses.
+If your dashboard is **open** (started with `--insecure`), no extra setup is needed — just make sure it's running with `--host 0.0.0.0`.
 
-## Connect remotely with Tailscale
+---
 
-Tailscale gives your phone and Hermes machine a private encrypted network, so you do **not** need to expose Hermes directly to the public internet.
+## Method 2: Connect over Tailscale (private VPN)
 
-Tailscale website: <https://tailscale.com/>
+Tailscale creates a private encrypted network between your phone and your computer. It's free for personal use and works from anywhere — no router changes needed.
 
-### Install Tailscale on Android
+### What you need
 
-1. Install Tailscale for Android: <https://tailscale.com/download/android>
-2. Sign in with the same Tailscale account/tailnet used by your Hermes machine.
-3. Leave Tailscale connected while using the Hermes app.
+- A free [Tailscale](https://tailscale.com/) account
+- Tailscale installed on **both** your phone and your Hermes computer
+- Both devices signed in to the same Tailscale account
 
-### Install Tailscale on the Hermes machine
+### Step 1: Install Tailscale on your phone
+
+1. Install Tailscale from the [Play Store](https://tailscale.com/download/android) or the link above.
+2. Open Tailscale and sign in.
+3. Leave it connected while using the Hermes app.
+
+### Step 2: Install Tailscale on your Hermes computer
 
 Install Tailscale for your OS: <https://tailscale.com/download>
-
-Examples:
 
 ```bash
 # macOS with Homebrew
@@ -215,95 +200,245 @@ curl -fsSL https://tailscale.com/install.sh | sh
 sudo tailscale up
 ```
 
-After the Hermes machine is connected, get its Tailscale address:
+### Step 3: Find your computer's Tailscale address
 
 ```bash
 tailscale ip -4
 ```
 
-You can also enable MagicDNS and use the machine name instead of the `100.x.y.z` IP:
+This gives you a `100.x.y.z` address. You can also use MagicDNS (the machine name) if enabled.
 
-- MagicDNS docs: <https://tailscale.com/kb/1081/magicdns>
+### Step 4: Add the connection in the app
 
-### Connect the app over Tailscale
+1. Open the Hermes app. Tap **+**.
+2. Fill in:
 
-In the Android app connection dialog:
+   | Field | What to type |
+   |-------|-------------|
+   | **Label** | e.g. `Home Tailscale` |
+   | **Host** | The Tailscale IP, e.g. `100.64.12.34` |
+   | **Port** | `8642` (leave as is) |
+   | **API Key** | The API key from your Hermes computer |
 
-- **Host:** the Hermes machine Tailscale IP, e.g. `100.64.12.34`, or its MagicDNS name
-- **Port:** `8642`
-- **API Key:** `API_SERVER_KEY`
+3. Tap **Connect**. You're ready to chat from anywhere!
 
-If using Memory/Cron/Skills/Settings remotely, keep the dashboard reachable on the same Tailscale host at port `9119`.
+---
 
-## Connect over Cloudflare Tunnel
+## Method 3: Connect over Cloudflare Tunnel (public URL)
 
-Cloudflare Tunnel exposes your home-PC Hermes to the internet over HTTPS without router port forwarding or VPN. The Android app connects to a public URL (e.g. `https://hermes-api.your-domain.com`) and Cloudflare routes traffic through the tunnel to your Hermes Gateway and dashboard.
+A Cloudflare Tunnel gives your Hermes server a public web address (like `https://hermes-api.your-domain.com`) that works from anywhere — no VPN, no router port forwarding, no open ports on your computer. Cloudflare handles the encryption and routing.
 
 ```text
-Android app → HTTPS → Cloudflare public hostname → tunnel → Home PC Hermes
+Your phone  →  HTTPS  →  Cloudflare public URL  →  tunnel  →  Your computer's Hermes
 ```
 
-### 1. Install cloudflared
+### What you need (checklist)
 
-Install `cloudflared` on the Hermes host machine. See the official guide: <https://developers.cloudflare.com/tunnel/setup/>
+Before you start, make sure you have:
 
-### 2. Create a tunnel
+- [ ] A **domain name** (e.g. `your-domain.com`) managed by Cloudflare
+- [ ] A free **Cloudflare account**
+- [ ] Your Hermes server running on your computer (Gateway on port `8642`, dashboard on port `9119`)
+- [ ] Your **API key** from Hermes (found in `~/.hermes/.env` on your computer)
+- [ ] Optional but recommended: **Cloudflare Access** set up for extra security (see below)
+
+> **Don't have a domain?** Use [Method 2 (Tailscale)](#method-2-connect-over-tailscale-private-vpn) instead — it's free and doesn't require a domain.
+
+---
+
+### Step 1: Install the Cloudflare tunnel tool
+
+On your Hermes computer, install `cloudflared`:
+
+- **Guide:** <https://developers.cloudflare.com/tunnel/setup/>
+- **macOS:** `brew install cloudflared`
+- **Linux:** `curl -fsSL https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64 -o /usr/local/bin/cloudflared && chmod +x /usr/local/bin/cloudflared`
+
+### Step 2: Log in and create a tunnel
 
 ```bash
 cloudflared tunnel login
-cloudflared tunnel create hermes-home
-# note the tunnel UUID and credentials JSON path
 ```
 
-### 3. Configure ingress with path-based routing
+This opens a browser to authorize Cloudflare. After that:
 
-The Gateway API (port `8642`) and the dashboard (port `9119`) run on different ports. Use path-based ingress rules to route requests to the correct backend:
+```bash
+cloudflared tunnel create hermes-home
+```
 
-`/etc/cloudflared/config.yml` (or `./cloudflared/config.yml` if running in Docker):
+Note the **tunnel UUID** and the **credentials JSON path** it prints — you'll need them in the next step.
+
+### Step 3: Create the config file
+
+Create a file at `/etc/cloudflared/config.yml` (or `./cloudflared/config.yml` if using Docker):
 
 ```yaml
 tunnel: hermes-home
 credentials-file: /etc/cloudflared/<UUID>.json
 
 ingress:
-  # Gateway API routes → port 8642
+  # Chat & sessions → port 8642
   - hostname: hermes-api.your-domain.com
     path: /api/sessions*
-    service: http://hermes-gateway:8642
+    service: http://localhost:8642
   - hostname: hermes-api.your-domain.com
     path: /v1/*
-    service: http://hermes-gateway:8642
+    service: http://localhost:8642
 
-  # Dashboard routes (everything else) → port 9119
+  # Dashboard (Memory, Cron, Skills, Settings) → port 9119
   - hostname: hermes-api.your-domain.com
-    service: http://hermes-gateway:9119
+    service: http://localhost:9119
 
   - service: http_status:404
 ```
 
-> Replace `hermes-gateway` with your actual container name (if using Docker) or `localhost` (if running directly on the host).
+> **Replace** `hermes-api.your-domain.com` with your actual domain.
+> **Replace** `<UUID>` with the tunnel UUID from Step 2.
+> **Replace** `localhost` with your Docker container name if Hermes runs in Docker.
 
-### 4. Route DNS and start the tunnel
+### Step 4: Connect your domain and start the tunnel
 
 ```bash
 cloudflared tunnel route dns hermes-home hermes-api.your-domain.com
 cloudflared tunnel run hermes-home
+```
 
-# Or install as a persistent service:
+To keep the tunnel running permanently:
+
+```bash
 sudo cloudflared service install
 ```
 
-### 5. Run cloudflared in Docker (bridge network)
+### Step 5: Test that the tunnel works
 
-If `cloudflared` runs in a Docker container on a bridge network, `localhost` inside the container refers to the container itself — not the host. Use one of these approaches:
+On your computer, run:
 
-**Same Docker network (recommended):** Put `cloudflared` and `hermes-gateway` on the same Docker network and use the container name:
+```bash
+curl https://hermes-api.your-domain.com/api/sessions \
+  -H "Authorization: Bearer YOUR_API_KEY"
+```
+
+If you see JSON output with sessions, the tunnel is working!
+
+> **If you set up Cloudflare Access** (recommended), also add the service token headers to the test:
+> ```bash
+> curl https://hermes-api.your-domain.com/api/sessions \
+>   -H "Authorization: Bearer YOUR_API_KEY" \
+>   -H "CF-Access-Client-Id: YOUR_CF_CLIENT_ID" \
+>   -H "CF-Access-Client-Secret: YOUR_CF_CLIENT_SECRET"
+> ```
+> If you get **403 Forbidden**, your Cloudflare Access policy is blocking the request — see [Setting up Cloudflare Access](#setting-up-cloudflare-access-optional-but-recommended) below.
+
+### Step 6: Enter the tunnel URL in the app
+
+This is the key step — here's exactly what to type in each field:
+
+1. Open the Hermes app on your phone.
+2. Tap the **+** button (bottom right corner).
+3. You'll see the **Add Gateway Connection** form. Fill it in like this:
+
+   | Field | What to type | Example |
+   |-------|-------------|---------|
+   | **Label** | Any name to remember this connection | `Home Hermes` |
+   | **Host** | Your full Cloudflare Tunnel URL **with** `https://` | `https://hermes-api.your-domain.com` |
+   | **Port** | **Delete the default value and leave it blank** — HTTPS uses port 443 automatically | *(empty)* |
+   | **API Key** | The API key from your Hermes computer's `~/.hermes/.env` file | `sk-abc123...` |
+   | **CF Access Client ID** | Your Cloudflare Access service token Client ID *(only if you set up Access)* | `abc123.access` |
+   | **CF Access Client Secret** | Your Cloudflare Access service token Client Secret *(only if you set up Access)* | `xyz789...` |
+
+4. Tap **Connect**. The app will test the connection.
+5. If it says **connected**, tap your new connection to start chatting!
+
+> **Important notes about the Host field:**
+> - Always include `https://` at the start — this tells the app to use encrypted HTTPS.
+> - Do **not** include a port number in the URL (e.g. `https://hermes-api.your-domain.com:8642` is wrong). The tunnel handles ports internally.
+> - Do **not** include a path (e.g. `https://hermes-api.your-domain.com/api`). Just the domain.
+
+> **About the Port field:** When the Host starts with `https://`, the app automatically uses port 443 (the standard HTTPS port). You can leave the Port field empty.
+
+### Step 7: Set up dashboard features (optional)
+
+For the drawer features (Memory, Cron Jobs, Skills, Settings) to work over the tunnel:
+
+1. On the connections list, tap the **⋮** (three dots) menu next to your connection.
+2. Tap **Dashboard / Proxy Settings**.
+3. Choose your dashboard type:
+
+   **If your dashboard is password-protected:**
+   - Enter the **Username** and **Password**
+   - Leave **Dashboard behind proxy** **off**
+   - Leave **Dashboard Port** blank
+   - Tap **Save**
+
+   **If your dashboard is open (started with `--insecure`):**
+   - Turn **on** the **Dashboard behind proxy** switch
+   - Leave everything else blank
+   - Tap **Save**
+
+   **If your dashboard is on a different domain than your API:**
+   - Enter the dashboard domain in **Dashboard Host** (e.g. `hermes.example.com`)
+   - Leave blank if both are on the same domain
+
+---
+
+### Setting up Cloudflare Access (optional but recommended)
+
+Cloudflare Access adds an extra security layer in front of your tunnel. Without it, anyone who knows your URL could try to connect. With it, only requests carrying your service token are allowed through.
+
+**How it works:**
+
+```text
+Request from app
+  → CF-Access-Client-Id + CF-Access-Client-Secret headers
+  → Cloudflare Access checks them
+  → If valid: request goes through to your Hermes
+  → If invalid: 403 Forbidden
+```
+
+**Create a service token:**
+
+1. Go to [Cloudflare Zero Trust](https://one.dash.cloudflare.com/) → **Access → Service Tokens**.
+2. Click **Create Service Token**.
+3. **Copy the Client ID and Client Secret immediately** — they're only shown once!
+4. Create an Access policy that requires the service token for your Hermes hostname.
+5. Enter the Client ID and Client Secret in the app's **Add Connection** dialog (the two **CF Access** fields), or in **⋮ → Dashboard / Proxy Settings** for an existing connection.
+
+**Your three layers of protection:**
+
+1. **Cloudflare Access service token** — blocks unauthorized requests at Cloudflare's edge.
+2. **Hermes API key** — authenticates against the Gateway API Server.
+3. **Cloudflare Tunnel** — encrypted connection from Cloudflare to your computer, no open ports.
+
+---
+
+### Cloudflare Tunnel troubleshooting
+
+| Problem | What to check |
+|---------|-------------|
+| **App says "Cannot reach host"** | Is the tunnel running? Run `cloudflared tunnel run hermes-home` on your computer and try again. |
+| **App says "403 Forbidden"** | You have Cloudflare Access enabled but didn't enter the CF Access Client ID and Secret in the app. Add them in the connection settings. |
+| **Chat works but dashboard screens fail** | The tunnel ingress config might not route dashboard paths to port `9119`. Check your `config.yml` — the catch-all rule should point to `9119`. |
+| **Dashboard screens show "401 Unauthorized"** | Your dashboard is password-protected. Enter the username and password in **⋮ → Dashboard / Proxy Settings**. |
+| **Dashboard screens show empty/error with `--insecure` dashboard** | Enable **Dashboard behind proxy** in Dashboard / Proxy Settings so the app skips token scraping (which fails through the tunnel). |
+| **Worked before but now stopped** | The tunnel service may have stopped. Restart it: `sudo systemctl restart cloudflared` or `cloudflared tunnel run hermes-home`. |
+
+---
+
+### Advanced: Cloudflare Tunnel in Docker
+
+<details>
+<summary>Click to expand Docker setup</summary>
+
+If `cloudflared` runs in a Docker container, `localhost` inside the container refers to the container itself — not your host machine. Use one of these approaches:
+
+**Option A — Same Docker network (recommended):**
+
+Put `cloudflared` and `hermes-gateway` on the same Docker network and use the container name:
 
 ```yaml
 # docker-compose.yml
 services:
   hermes-gateway:
-    # no ports needed — cloudflared reaches it internally
     networks:
       - hermes-net
 
@@ -324,7 +459,9 @@ networks:
 
 Then in `config.yml`, use `http://hermes-gateway:8642` and `http://hermes-gateway:9119`.
 
-**Host machine:** If Hermes runs on the host (not in Docker), add `extra_hosts` and use `host.docker.internal`:
+**Option B — Hermes on the host (not in Docker):**
+
+Add `extra_hosts` and use `host.docker.internal`:
 
 ```yaml
 services:
@@ -339,65 +476,12 @@ services:
 
 Then in `config.yml`, use `http://host.docker.internal:8642` and `http://host.docker.internal:9119`. The Hermes Gateway and dashboard must bind to `0.0.0.0` (not `127.0.0.1`) for the container to reach them.
 
-### 6. Verify the tunnel
-
-```bash
-# Gateway (should return sessions JSON)
-curl https://hermes-api.your-domain.com/api/sessions \
-  -H "Authorization: Bearer <API_SERVER_KEY>" \
-  -H "CF-Access-Client-Id: <CF_CLIENT_ID>" \
-  -H "CF-Access-Client-Secret: <CF_CLIENT_SECRET>"
-
-# Dashboard (should return model info JSON)
-curl https://hermes-api.your-domain.com/api/model/info \
-  -H "CF-Access-Client-Id: <CF_CLIENT_ID>" \
-  -H "CF-Access-Client-Secret: <CF_CLIENT_SECRET>"
-```
-
-### 7. Point the app at it
-
-In the app's **Add Connection** dialog:
-
-| Field | Value |
-|-------|-------|
-| **Label** | any name, e.g. `Home Hermes` |
-| **Host** | `https://hermes-api.your-domain.com` |
-| **Port** | leave blank (defaults to 443 for HTTPS) |
-| **API Key** | `API_SERVER_KEY` from the Hermes machine |
-| **CF Access Client ID** | Service Token Client ID from Cloudflare Access |
-| **CF Access Client Secret** | Service Token Client Secret from Cloudflare Access |
-
-For dashboard drawer features (Memory, Cron, Skills, Settings), configure auth via **⋮ → Dashboard / Proxy Settings**:
-
-- If the dashboard is **password-protected**: enter **Username** and **Password**, leave **Dashboard behind proxy** off. The app logs in via `/auth/password-login` and reuses the session cookie.
-- If the dashboard runs with **`--insecure`** (no auth): enable **Dashboard behind proxy** so the app sends clean requests without trying to scrape a session token.
-- **Dashboard Port**: leave blank — for HTTPS connections the app uses the same port as the gateway (443).
-- **Dashboard Host**: set this when the dashboard is on a different subdomain than the Gateway API (e.g. dashboard at `hermes.example.com`, API at `hermes-api.example.com`). Leave blank to use the same host as the gateway.
-
-### Cloudflare Access service tokens
-
-When Cloudflare Access protects your tunnel, every request must include `CF-Access-Client-Id` and `CF-Access-Client-Secret` headers or Cloudflare returns **403 Forbidden**. The app sends these headers on every Gateway API and Dashboard request when the fields are filled in.
-
-**Three-layer protection:**
-
-1. **Cloudflare Access service token** — `CF-Access-Client-Id` + `CF-Access-Client-Secret` headers let the request through Cloudflare Access.
-2. **Hermes API key** — `Authorization: Bearer <API_SERVER_KEY>` header authenticates against the Gateway API Server.
-3. **Cloudflare Tunnel** — encrypted connection from Cloudflare's edge to your home PC, no open ports.
-
-**Creating a service token in Cloudflare Access:**
-
-1. Go to **Cloudflare Zero Trust → Access → Service Tokens**.
-2. Click **Create Service Token**.
-3. Copy the **Client ID** and **Client Secret** (shown only once).
-4. Create an Access policy that requires the service token for your Hermes hostname.
-
-Enter the Client ID and Client Secret in the app's **Add Connection** dialog (or **⋮ → Dashboard / Proxy Settings** for existing connections). The app stores them securely and sends them as headers on every request.
+</details>
 
 ### Cloudflare Tunnel security notes
 
-- Keep the Gateway API key required even behind Cloudflare — do not rely on URL obscurity.
-- Cloudflare Access service tokens add an authentication layer in front of the tunnel — use them for production deployments.
-- Optional additional hardening: mTLS, IP allowlist.
+- Always keep the Hermes API key required, even behind Cloudflare — don't rely on URL obscurity.
+- Cloudflare Access service tokens add an authentication layer — use them for any deployment exposed to the internet.
 - See [`docs/CLOUD_FLARE_TUNNEL.md`](docs/CLOUD_FLARE_TUNNEL.md) for a concise setup reference.
 
 ## Connect over HTTPS
@@ -649,7 +733,7 @@ Check that the Android connection's API key matches `API_SERVER_KEY` from the He
 - If the dashboard sits behind a reverse-proxy path, set **Dashboard path prefix**. If the proxy injects dashboard auth, enable **Dashboard behind proxy** so the app sends clean requests.
 - Check the dashboard port matches the connection (default `9119` for local/Tailscale, same HTTPS port for hosted; override it in Dashboard / Proxy Settings if needed).
 - The dashboard must be on the same host as the Gateway API Server for the app's drawer to reach it.
-- **Over Cloudflare Tunnel**: ensure the tunnel ingress routes dashboard paths (`/api/memory`, `/api/cron/jobs`, `/api/skills`, `/api/model/*`, `/auth/*`) to port `9119` and gateway paths (`/api/sessions`, `/v1/*`) to port `8642`. See [Connect over Cloudflare Tunnel](#connect-over-cloudflare-tunnel).
+- **Over Cloudflare Tunnel**: ensure the tunnel ingress routes dashboard paths (`/api/memory`, `/api/cron/jobs`, `/api/skills`, `/api/model/*`, `/auth/*`) to port `9119` and gateway paths (`/api/sessions`, `/v1/*`) to port `8642`. See [Method 3: Cloudflare Tunnel](#method-3-connect-over-cloudflare-tunnel-public-url).
 - **Over Cloudflare Tunnel with `--insecure` dashboard**: enable **Dashboard behind proxy** in Dashboard / Proxy Settings so the app skips token scraping (which fails through the tunnel) and sends clean requests directly.
 
 ### Voice dictation or spoken replies aren't working
