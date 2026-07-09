@@ -354,7 +354,7 @@ class ApiClient {
   Future<void> deleteSession(String sessionId) async {
     final res = await _http.delete(
       Uri.parse('$baseUrl/api/sessions/$sessionId'),
-      headers: _headers,s
+      headers: _headers,
     );
     if (res.statusCode < 200 || res.statusCode >= 300) {
       throw Exception('HTTP ${res.statusCode}: ${res.body}');
