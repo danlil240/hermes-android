@@ -28,7 +28,7 @@ class _MemoryScreenState extends State<MemoryScreen> {
   void initState() {
     super.initState();
     _client = DashboardClient(
-      host: widget.connection.host,
+      host: widget.connection.dashboardHost,
       port: widget.connection.dashboardPort,
       pathPrefix: widget.connection.dashboardPrefix ?? "",
       proxied: widget.connection.dashboardProxied,

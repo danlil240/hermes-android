@@ -343,6 +343,7 @@ class _HomeScreenState extends State<HomeScreen> {
               dashboardPrefix,
               dashboardProxied = false,
               dashboardPort,
+              dashboardHost,
               dashboardUsername,
               dashboardPassword,
               cfAccessClientId,
@@ -357,6 +358,7 @@ class _HomeScreenState extends State<HomeScreen> {
                 dashboardPrefix: dashboardPrefix,
                 dashboardProxied: dashboardProxied,
                 dashboardPort: dashboardPort,
+                dashboardHost: dashboardHost,
                 dashboardUsername: dashboardUsername,
                 dashboardPassword: dashboardPassword,
                 cfAccessClientId: cfAccessClientId,
@@ -504,6 +506,9 @@ class _HomeScreenState extends State<HomeScreen> {
     final portCtrl = TextEditingController(
       text: conn.dashboardPortOverride?.toString() ?? '',
     );
+    final dashHostCtrl = TextEditingController(
+      text: conn.dashboardHostOverride ?? '',
+    );
     final userCtrl = TextEditingController(text: conn.dashboardUsername ?? '');
     final passCtrl = TextEditingController(text: conn.dashboardPassword ?? '');
     final cfIdCtrl = TextEditingController(text: conn.cfAccessClientId ?? '');
@@ -606,6 +611,16 @@ class _HomeScreenState extends State<HomeScreen> {
                 ),
                 const SizedBox(height: 12),
                 TextField(
+                  controller: dashHostCtrl,
+                  decoration: const InputDecoration(
+                    labelText: 'Dashboard Host (optional)',
+                    hintText: 'e.g. hermes.example.com (defaults to gateway host)',
+                  ),
+                  autocorrect: false,
+                  enabled: !validating,
+                ),
+                const SizedBox(height: 12),
+                TextField(
                   controller: userCtrl,
                   decoration: const InputDecoration(
                     labelText: 'Username (optional)',
@@ -667,6 +682,7 @@ class _HomeScreenState extends State<HomeScreen> {
                       final pass = passCtrl.text.trim();
                       final gatewayPrefix = gatewayPrefixCtrl.text.trim();
                       final dashboardPrefix = dashboardPrefixCtrl.text.trim();
+                      final dashHost = dashHostCtrl.text.trim();
 
                       setDialogState(() {
                         validating = true;
@@ -700,7 +716,7 @@ class _HomeScreenState extends State<HomeScreen> {
                       }
 
                       final client = DashboardClient(
-                        host: conn.host,
+                        host: dashHost.isEmpty ? conn.host : dashHost,
                         port: port ?? conn.dashboardPort,
                         useHttps: conn.useHttps,
                         pathPrefix: dashboardPrefix,
@@ -721,6 +737,7 @@ class _HomeScreenState extends State<HomeScreen> {
                         await widget.connManager.updateDashboardAuth(
                           conn.id,
                           dashboardPort: port,
+                          dashboardHost: dashHost,
                           username: user,
                           password: pass,
                           gatewayPrefix: gatewayPrefix,
@@ -738,8 +755,8 @@ class _HomeScreenState extends State<HomeScreen> {
                         setDialogState(() {
                           error =
                               'Could not reach/authenticate the dashboard at '
-                              '${conn.host}:${port ?? conn.dashboardPort}. '
-                              'Check the port and credentials.';
+                              '${dashHost.isEmpty ? conn.host : dashHost}:${port ?? conn.dashboardPort}. '
+                              'Check the host, port and credentials.';
                           validating = false;
                         });
                       }
@@ -763,6 +780,7 @@ class _HomeScreenState extends State<HomeScreen> {
         gatewayPrefixCtrl.dispose();
         dashboardPrefixCtrl.dispose();
         portCtrl.dispose();
+        dashHostCtrl.dispose();
         userCtrl.dispose();
         passCtrl.dispose();
         cfIdCtrl.dispose();
@@ -915,6 +933,7 @@ class _AddDialog extends StatefulWidget {
     String? dashboardPrefix,
     bool dashboardProxied,
     int? dashboardPort,
+    String? dashboardHost,
     String? dashboardUsername,
     String? dashboardPassword,
     String? cfAccessClientId,
@@ -935,6 +954,7 @@ class _AddDialogState extends State<_AddDialog> {
   final _gatewayPrefix = TextEditingController();
   final _dashboardPrefix = TextEditingController();
   final _dashPort = TextEditingController();
+  final _dashHost = TextEditingController();
   final _dashUser = TextEditingController();
   final _dashPass = TextEditingController();
   final _cfAccessClientId = TextEditingController();
@@ -994,20 +1014,24 @@ class _AddDialogState extends State<_AddDialog> {
       }
 
       final dashPortText = _dashPort.text.trim();
+      final dashHostText = _dashHost.text.trim();
       final dashUser = _dashUser.text.trim();
       final dashPass = _dashPass.text.trim();
       final dashPort = dashPortText.isEmpty ? null : int.tryParse(dashPortText);
+      final dashHost = dashHostText.isEmpty ? null : dashHostText;
 
       // If the user supplied any dashboard details, validate them before saving
       // (parity with the Dashboard Login dialog). The gateway is already known
       // good at this point.
       if (dashPortText.isNotEmpty ||
+          dashHostText.isNotEmpty ||
           dashUser.isNotEmpty ||
           dashPass.isNotEmpty ||
           dashboardPrefix.isNotEmpty ||
           _dashboardProxied) {
+        final dashHostForValidation = dashHost ?? normalized.host;
         final dashClient = DashboardClient(
-          host: normalized.host,
+          host: dashHostForValidation,
           port: SavedConnection(
             id: '',
             label: '',
@@ -1056,6 +1080,7 @@ class _AddDialogState extends State<_AddDialog> {
         dashboardPrefix: dashboardPrefix.isEmpty ? null : dashboardPrefix,
         dashboardProxied: _dashboardProxied,
         dashboardPort: dashPort,
+        dashboardHost: dashHost,
         dashboardUsername: dashUser.isEmpty ? null : dashUser,
         dashboardPassword: dashPass.isEmpty ? null : dashPass,
         cfAccessClientId: _cfAccessClientId.text.trim().isEmpty
@@ -1234,6 +1259,15 @@ class _AddDialogState extends State<_AddDialog> {
               ),
               const SizedBox(height: 12),
               TextField(
+                controller: _dashHost,
+                decoration: const InputDecoration(
+                  labelText: 'Dashboard Host (optional)',
+                  hintText: 'e.g. hermes.example.com (defaults to gateway host)',
+                ),
+                autocorrect: false,
+              ),
+              const SizedBox(height: 12),
+              TextField(
                 controller: _dashUser,
                 decoration: const InputDecoration(
                   labelText: 'Dashboard Username (optional)',
@@ -1283,6 +1317,7 @@ class _AddDialogState extends State<_AddDialog> {
     _gatewayPrefix.dispose();
     _dashboardPrefix.dispose();
     _dashPort.dispose();
+    _dashHost.dispose();
     _dashUser.dispose();
     _dashPass.dispose();
     _cfAccessClientId.dispose();

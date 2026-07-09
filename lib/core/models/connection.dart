@@ -27,6 +27,11 @@ class SavedConnection {
   /// non-default port.
   final int? dashboardPortOverride;
 
+  /// Explicit dashboard host. When null, [dashboardHost] falls back to [host].
+  /// Set this when the dashboard is on a different subdomain than the Gateway
+  /// API (e.g. dashboard at `hermes.example.com`, API at `hermes-api.example.com`).
+  final String? dashboardHostOverride;
+
   /// Optional dashboard credentials for a basic-auth (password-protected)
   /// dashboard. When both are set, [DashboardClient] performs the
   /// `/auth/password-login` flow and authenticates with the resulting session
@@ -52,6 +57,7 @@ class SavedConnection {
     this.dashboardPrefix,
     this.dashboardProxied = false,
     this.dashboardPortOverride,
+    this.dashboardHostOverride,
     this.dashboardUsername,
     this.dashboardPassword,
     this.cfAccessClientId,
@@ -69,6 +75,10 @@ class SavedConnection {
   /// both API surfaces on the same external HTTPS port. An explicit
   /// [dashboardPortOverride] always wins.
   int get dashboardPort => dashboardPortOverride ?? (useHttps ? port : 9119);
+
+  /// The host to use for dashboard requests. Falls back to [host] when no
+  /// override is set.
+  String get dashboardHost => dashboardHostOverride ?? host;
 
   /// Joins a base URL with an optional path prefix, normalising slashes.
   static String joinBaseUrl(String baseUrl, String pathPrefix) {
@@ -140,6 +150,9 @@ class SavedConnection {
       'use_https': useHttps,
       'dashboard_port': dashboardPortOverride,
     };
+    if (dashboardHostOverride != null && dashboardHostOverride!.isNotEmpty) {
+      m['dashboard_host'] = dashboardHostOverride;
+    }
     if (gatewayPrefix != null && gatewayPrefix!.isNotEmpty) {
       m['gateway_prefix'] = gatewayPrefix;
     }
@@ -181,6 +194,7 @@ class SavedConnection {
       dashboardPrefix: map['dashboard_prefix'] as String?,
       dashboardProxied: (map['dashboard_proxied'] as bool?) ?? false,
       dashboardPortOverride: map['dashboard_port'] as int?,
+      dashboardHostOverride: nonEmpty(map['dashboard_host']),
       dashboardUsername: nonEmpty(map['dashboard_username']),
       dashboardPassword: nonEmpty(map['dashboard_password']),
       cfAccessClientId: nonEmpty(map['cf_access_client_id']),
@@ -201,6 +215,7 @@ class SavedConnection {
     String? dashboardPrefix,
     bool? dashboardProxied,
     int? dashboardPortOverride,
+    String? dashboardHostOverride,
     String? dashboardUsername,
     String? dashboardPassword,
     String? cfAccessClientId,
@@ -208,6 +223,7 @@ class SavedConnection {
     bool clearGatewayPrefix = false,
     bool clearDashboardPrefix = false,
     bool clearDashboardPort = false,
+    bool clearDashboardHost = false,
     bool clearDashboardUsername = false,
     bool clearDashboardPassword = false,
     bool clearCfAccessClientId = false,
@@ -230,6 +246,9 @@ class SavedConnection {
       dashboardPortOverride: clearDashboardPort
           ? null
           : (dashboardPortOverride ?? this.dashboardPortOverride),
+      dashboardHostOverride: clearDashboardHost
+          ? null
+          : (dashboardHostOverride ?? this.dashboardHostOverride),
       dashboardUsername: clearDashboardUsername
           ? null
           : (dashboardUsername ?? this.dashboardUsername),

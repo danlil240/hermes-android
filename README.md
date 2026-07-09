@@ -372,6 +372,7 @@ For dashboard drawer features (Memory, Cron, Skills, Settings), configure auth v
 - If the dashboard is **password-protected**: enter **Username** and **Password**, leave **Dashboard behind proxy** off. The app logs in via `/auth/password-login` and reuses the session cookie.
 - If the dashboard runs with **`--insecure`** (no auth): enable **Dashboard behind proxy** so the app sends clean requests without trying to scrape a session token.
 - **Dashboard Port**: leave blank — for HTTPS connections the app uses the same port as the gateway (443).
+- **Dashboard Host**: set this when the dashboard is on a different subdomain than the Gateway API (e.g. dashboard at `hermes.example.com`, API at `hermes-api.example.com`). Leave blank to use the same host as the gateway.
 
 ### Cloudflare Access service tokens
 

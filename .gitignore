@@ -47,3 +47,5 @@ app.*.map.json
 
 # Local keystore properties
 /key.properties
+keystore_base64.txt
+release.keystore

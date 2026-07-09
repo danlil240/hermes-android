@@ -168,6 +168,7 @@ class ConnectionManager {
     String? dashboardPrefix,
     bool dashboardProxied = false,
     int? dashboardPort,
+    String? dashboardHost,
     String? dashboardUsername,
     String? dashboardPassword,
     String? cfAccessClientId,
@@ -186,6 +187,7 @@ class ConnectionManager {
       dashboardPrefix: dashboardPrefix,
       dashboardProxied: dashboardProxied,
       dashboardPortOverride: dashboardPort,
+      dashboardHostOverride: dashboardHost,
       dashboardUsername: dashboardUsername,
       dashboardPassword: dashboardPassword,
       cfAccessClientId: cfAccessClientId,
@@ -211,6 +213,7 @@ class ConnectionManager {
   Future<void> updateDashboardAuth(
     String connId, {
     int? dashboardPort,
+    String? dashboardHost,
     required String username,
     required String password,
     String? gatewayPrefix,
@@ -226,6 +229,7 @@ class ConnectionManager {
     final p = password.trim();
     final gateway = gatewayPrefix?.trim();
     final dashboard = dashboardPrefix?.trim();
+    final dashHost = dashboardHost?.trim();
     final cfId = cfAccessClientId?.trim();
     final cfSecret = cfAccessClientSecret?.trim();
     current[idx] = current[idx].copyWith(
@@ -238,6 +242,8 @@ class ConnectionManager {
       dashboardProxied: dashboardProxied,
       dashboardPortOverride: dashboardPort,
       clearDashboardPort: dashboardPort == null,
+      dashboardHostOverride: dashHost == null || dashHost.isEmpty ? null : dashHost,
+      clearDashboardHost: dashHost != null && dashHost.isEmpty,
       dashboardUsername: u.isEmpty ? null : u,
       clearDashboardUsername: u.isEmpty,
       dashboardPassword: p.isEmpty ? null : p,
