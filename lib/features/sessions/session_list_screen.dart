@@ -46,6 +46,8 @@ class _SessionListScreenState extends State<SessionListScreen> {
       baseUrl: widget.connection.baseUrl,
       apiKey: widget.connection.apiKey,
       pathPrefix: widget.connection.gatewayPrefix ?? '',
+      cfAccessClientId: widget.connection.cfAccessClientId,
+      cfAccessClientSecret: widget.connection.cfAccessClientSecret,
     );
     _checkHealth();
   }
@@ -344,6 +346,15 @@ class _SessionListScreenState extends State<SessionListScreen> {
                 ],
               ),
             ),
+            ListTile(
+              leading: const Icon(Icons.swap_horiz),
+              title: const Text('Switch Connection'),
+              onTap: () {
+                Navigator.pop(context); // close drawer
+                Navigator.pop(context); // pop to connections list
+              },
+            ),
+            const Divider(),
             ListTile(
               leading: const Icon(Icons.memory),
               title: const Text('Memory'),

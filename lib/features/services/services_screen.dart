@@ -41,6 +41,8 @@ class _ServicesScreenState extends State<ServicesScreen>
       baseUrl: widget.connection.baseUrl,
       apiKey: widget.connection.apiKey,
       pathPrefix: widget.connection.gatewayPrefix ?? '',
+      cfAccessClientId: widget.connection.cfAccessClientId,
+      cfAccessClientSecret: widget.connection.cfAccessClientSecret,
     );
     _load();
   }
@@ -361,6 +363,8 @@ class _ServicesScreenState extends State<ServicesScreen>
             baseUrl: widget.connection.baseUrl,
             apiKey: widget.connection.apiKey,
             pathPrefix: widget.connection.gatewayPrefix ?? '',
+            cfAccessClientId: widget.connection.cfAccessClientId,
+            cfAccessClientSecret: widget.connection.cfAccessClientSecret,
           ),
           run: run,
         ),

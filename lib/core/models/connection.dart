@@ -35,6 +35,12 @@ class SavedConnection {
   final String? dashboardUsername;
   final String? dashboardPassword;
 
+  /// Cloudflare Access service-token credentials. When both are set, the app
+  /// sends `CF-Access-Client-Id` and `CF-Access-Client-Secret` headers on every
+  /// Gateway API and Dashboard request so Cloudflare Access lets them through.
+  final String? cfAccessClientId;
+  final String? cfAccessClientSecret;
+
   SavedConnection({
     required this.id,
     required this.label,
@@ -48,6 +54,8 @@ class SavedConnection {
     this.dashboardPortOverride,
     this.dashboardUsername,
     this.dashboardPassword,
+    this.cfAccessClientId,
+    this.cfAccessClientSecret,
   });
 
   String get baseUrl {
@@ -147,6 +155,12 @@ class SavedConnection {
     if (dashboardPassword != null && dashboardPassword!.isNotEmpty) {
       m['dashboard_password'] = dashboardPassword;
     }
+    if (cfAccessClientId != null && cfAccessClientId!.isNotEmpty) {
+      m['cf_access_client_id'] = cfAccessClientId;
+    }
+    if (cfAccessClientSecret != null && cfAccessClientSecret!.isNotEmpty) {
+      m['cf_access_client_secret'] = cfAccessClientSecret;
+    }
     return m;
   }
 
@@ -169,6 +183,8 @@ class SavedConnection {
       dashboardPortOverride: map['dashboard_port'] as int?,
       dashboardUsername: nonEmpty(map['dashboard_username']),
       dashboardPassword: nonEmpty(map['dashboard_password']),
+      cfAccessClientId: nonEmpty(map['cf_access_client_id']),
+      cfAccessClientSecret: nonEmpty(map['cf_access_client_secret']),
     );
   }
 
@@ -187,11 +203,15 @@ class SavedConnection {
     int? dashboardPortOverride,
     String? dashboardUsername,
     String? dashboardPassword,
+    String? cfAccessClientId,
+    String? cfAccessClientSecret,
     bool clearGatewayPrefix = false,
     bool clearDashboardPrefix = false,
     bool clearDashboardPort = false,
     bool clearDashboardUsername = false,
     bool clearDashboardPassword = false,
+    bool clearCfAccessClientId = false,
+    bool clearCfAccessClientSecret = false,
   }) {
     return SavedConnection(
       id: id,
@@ -216,6 +236,12 @@ class SavedConnection {
       dashboardPassword: clearDashboardPassword
           ? null
           : (dashboardPassword ?? this.dashboardPassword),
+      cfAccessClientId: clearCfAccessClientId
+          ? null
+          : (cfAccessClientId ?? this.cfAccessClientId),
+      cfAccessClientSecret: clearCfAccessClientSecret
+          ? null
+          : (cfAccessClientSecret ?? this.cfAccessClientSecret),
     );
   }
 }

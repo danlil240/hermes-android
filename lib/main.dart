@@ -12,6 +12,7 @@ void main() async {
   final prefs = await SharedPreferences.getInstance();
   final secureStorage = SecureStorage();
   final connManager = ConnectionManager(prefs, secureStorage);
+  await connManager.migrateSecretsToSecureStorage();
   final biometricLock = BiometricLock();
   runApp(HermesApp(
     connManager: connManager,
@@ -344,6 +345,8 @@ class _HomeScreenState extends State<HomeScreen> {
               dashboardPort,
               dashboardUsername,
               dashboardPassword,
+              cfAccessClientId,
+              cfAccessClientSecret,
             }) {
               widget.connManager.saveConnection(
                 label,
@@ -356,6 +359,8 @@ class _HomeScreenState extends State<HomeScreen> {
                 dashboardPort: dashboardPort,
                 dashboardUsername: dashboardUsername,
                 dashboardPassword: dashboardPassword,
+                cfAccessClientId: cfAccessClientId,
+                cfAccessClientSecret: cfAccessClientSecret,
               ).then((_) => _refresh());
             },
       ),
@@ -441,20 +446,22 @@ class _HomeScreenState extends State<HomeScreen> {
                           baseUrl: baseUrl,
                           apiKey: key,
                           pathPrefix: conn.gatewayPrefix ?? '',
+                          cfAccessClientId: conn.cfAccessClientId,
+                          cfAccessClientSecret: conn.cfAccessClientSecret,
                         );
-                        final ok = await client.healthCheck();
+                        final result = await client.healthCheckDetail();
                         client.close();
 
                         if (!ctx.mounted) return;
 
-                        if (ok) {
+                        if (result.ok) {
                           await widget.connManager.updateApiKey(conn.id, key);
                           _refresh();
                           if (!ctx.mounted) return;
                           Navigator.pop(ctx);
                         } else {
                           setDialogState(() {
-                            error = 'Invalid API key. Server returned 401.';
+                            error = result.message ?? 'Validation failed.';
                             validating = false;
                           });
                         }
@@ -480,7 +487,11 @@ class _HomeScreenState extends State<HomeScreen> {
           ],
         ),
       ),
-    );
+    ).whenComplete(() {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        ctrl.dispose();
+      });
+    });
   }
 
   void _showDashboardAuthDialog(SavedConnection conn) {
@@ -495,6 +506,8 @@ class _HomeScreenState extends State<HomeScreen> {
     );
     final userCtrl = TextEditingController(text: conn.dashboardUsername ?? '');
     final passCtrl = TextEditingController(text: conn.dashboardPassword ?? '');
+    final cfIdCtrl = TextEditingController(text: conn.cfAccessClientId ?? '');
+    final cfSecretCtrl = TextEditingController(text: conn.cfAccessClientSecret ?? '');
     var proxied = conn.dashboardProxied;
     bool validating = false;
     String? error;
@@ -609,6 +622,27 @@ class _HomeScreenState extends State<HomeScreen> {
                   obscureText: true,
                   enabled: !validating,
                 ),
+                const SizedBox(height: 12),
+                TextField(
+                  controller: cfIdCtrl,
+                  decoration: const InputDecoration(
+                    labelText: 'CF Access Client ID (optional)',
+                    hintText: 'Cloudflare Access service token Client ID',
+                  ),
+                  autocorrect: false,
+                  enabled: !validating,
+                ),
+                const SizedBox(height: 12),
+                TextField(
+                  controller: cfSecretCtrl,
+                  decoration: const InputDecoration(
+                    labelText: 'CF Access Client Secret (optional)',
+                    hintText: 'Cloudflare Access service token Client Secret',
+                  ),
+                  obscureText: true,
+                  autocorrect: false,
+                  enabled: !validating,
+                ),
               ],
             ),
           ),
@@ -644,13 +678,19 @@ class _HomeScreenState extends State<HomeScreen> {
                           baseUrl: conn.baseUrl,
                           apiKey: conn.apiKey,
                           pathPrefix: gatewayPrefix,
+                          cfAccessClientId: cfIdCtrl.text.trim().isEmpty
+                              ? null
+                              : cfIdCtrl.text.trim(),
+                          cfAccessClientSecret: cfSecretCtrl.text.trim().isEmpty
+                              ? null
+                              : cfSecretCtrl.text.trim(),
                         );
-                        final ok = await apiClient.healthCheck();
+                        final result = await apiClient.healthCheckDetail();
                         apiClient.close();
                         if (!ctx.mounted) return;
-                        if (!ok) {
+                        if (!result.ok) {
                           setDialogState(() {
-                            error =
+                            error = result.message ??
                                 'Could not reach/authenticate the Gateway API at '
                                 '${conn.host}:${conn.port}$gatewayPrefix.';
                             validating = false;
@@ -667,6 +707,12 @@ class _HomeScreenState extends State<HomeScreen> {
                         proxied: proxied,
                         username: user.isEmpty ? null : user,
                         password: pass.isEmpty ? null : pass,
+                        cfAccessClientId: cfIdCtrl.text.trim().isEmpty
+                            ? null
+                            : cfIdCtrl.text.trim(),
+                        cfAccessClientSecret: cfSecretCtrl.text.trim().isEmpty
+                            ? null
+                            : cfSecretCtrl.text.trim(),
                       );
                       try {
                         await client.getModelInfo();
@@ -680,6 +726,8 @@ class _HomeScreenState extends State<HomeScreen> {
                           gatewayPrefix: gatewayPrefix,
                           dashboardPrefix: dashboardPrefix,
                           dashboardProxied: proxied,
+                          cfAccessClientId: cfIdCtrl.text.trim(),
+                          cfAccessClientSecret: cfSecretCtrl.text.trim(),
                         );
                         _refresh();
                         if (!ctx.mounted) return;
@@ -711,11 +759,15 @@ class _HomeScreenState extends State<HomeScreen> {
         ),
       ),
     ).whenComplete(() {
-      gatewayPrefixCtrl.dispose();
-      dashboardPrefixCtrl.dispose();
-      portCtrl.dispose();
-      userCtrl.dispose();
-      passCtrl.dispose();
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        gatewayPrefixCtrl.dispose();
+        dashboardPrefixCtrl.dispose();
+        portCtrl.dispose();
+        userCtrl.dispose();
+        passCtrl.dispose();
+        cfIdCtrl.dispose();
+        cfSecretCtrl.dispose();
+      });
     });
   }
 
@@ -865,6 +917,8 @@ class _AddDialog extends StatefulWidget {
     int? dashboardPort,
     String? dashboardUsername,
     String? dashboardPassword,
+    String? cfAccessClientId,
+    String? cfAccessClientSecret,
   })
   onSave;
   const _AddDialog({required this.onSave});
@@ -883,6 +937,8 @@ class _AddDialogState extends State<_AddDialog> {
   final _dashPort = TextEditingController();
   final _dashUser = TextEditingController();
   final _dashPass = TextEditingController();
+  final _cfAccessClientId = TextEditingController();
+  final _cfAccessClientSecret = TextEditingController();
   bool _showDashboard = false;
   bool _dashboardProxied = false;
   bool _validating = false;
@@ -917,17 +973,21 @@ class _AddDialogState extends State<_AddDialog> {
         baseUrl: baseUrl,
         apiKey: apiKey,
         pathPrefix: gatewayPrefix,
+        cfAccessClientId: _cfAccessClientId.text.trim().isEmpty
+            ? null
+            : _cfAccessClientId.text.trim(),
+        cfAccessClientSecret: _cfAccessClientSecret.text.trim().isEmpty
+            ? null
+            : _cfAccessClientSecret.text.trim(),
       );
-      final ok = await client.healthCheck();
+      final result = await client.healthCheckDetail();
       client.close();
 
       if (!mounted) return;
 
-      if (!ok) {
+      if (!result.ok) {
         setState(() {
-          _error = apiKey.isEmpty
-              ? 'Server requires an API key. Enter your API_SERVER_KEY.'
-              : 'Invalid API key. Server returned 401.';
+          _error = result.message ?? 'Validation failed.';
           _validating = false;
         });
         return;
@@ -962,6 +1022,12 @@ class _AddDialogState extends State<_AddDialog> {
           proxied: _dashboardProxied,
           username: dashUser.isEmpty ? null : dashUser,
           password: dashPass.isEmpty ? null : dashPass,
+          cfAccessClientId: _cfAccessClientId.text.trim().isEmpty
+              ? null
+              : _cfAccessClientId.text.trim(),
+          cfAccessClientSecret: _cfAccessClientSecret.text.trim().isEmpty
+              ? null
+              : _cfAccessClientSecret.text.trim(),
         );
         try {
           await dashClient.getModelInfo();
@@ -992,6 +1058,12 @@ class _AddDialogState extends State<_AddDialog> {
         dashboardPort: dashPort,
         dashboardUsername: dashUser.isEmpty ? null : dashUser,
         dashboardPassword: dashPass.isEmpty ? null : dashPass,
+        cfAccessClientId: _cfAccessClientId.text.trim().isEmpty
+            ? null
+            : _cfAccessClientId.text.trim(),
+        cfAccessClientSecret: _cfAccessClientSecret.text.trim().isEmpty
+            ? null
+            : _cfAccessClientSecret.text.trim(),
       );
       Navigator.pop(context);
     } catch (e) {
@@ -1071,6 +1143,25 @@ class _AddDialogState extends State<_AddDialog> {
                 hintText: 'API_SERVER_KEY from ~/.hermes/.env',
               ),
               obscureText: true,
+            ),
+            const SizedBox(height: 12),
+            TextField(
+              controller: _cfAccessClientId,
+              decoration: const InputDecoration(
+                labelText: 'CF Access Client ID (optional)',
+                hintText: 'Cloudflare Access service token Client ID',
+              ),
+              autocorrect: false,
+            ),
+            const SizedBox(height: 12),
+            TextField(
+              controller: _cfAccessClientSecret,
+              decoration: const InputDecoration(
+                labelText: 'CF Access Client Secret (optional)',
+                hintText: 'Cloudflare Access service token Client Secret',
+              ),
+              obscureText: true,
+              autocorrect: false,
             ),
             const SizedBox(height: 4),
             InkWell(
@@ -1194,6 +1285,8 @@ class _AddDialogState extends State<_AddDialog> {
     _dashPort.dispose();
     _dashUser.dispose();
     _dashPass.dispose();
+    _cfAccessClientId.dispose();
+    _cfAccessClientSecret.dispose();
     super.dispose();
   }
 }

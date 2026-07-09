@@ -2,6 +2,7 @@
 
 import 'dart:async';
 import 'dart:convert';
+import 'dart:io';
 import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:uuid/uuid.dart';
@@ -14,6 +15,19 @@ import '../storage/secure_storage.dart';
 export '../models/connection.dart';
 export '../models/service.dart';
 export '../models/session.dart';
+
+/// Result of a health check with detailed error info.
+class HealthCheckResult {
+  final bool ok;
+  final int? statusCode;
+  final String? message;
+
+  const HealthCheckResult({
+    required this.ok,
+    this.statusCode,
+    this.message,
+  });
+}
 
 /// Manages saved remote connections using SharedPreferences for metadata
 /// and [SecureStorage] for secrets (API keys, dashboard credentials).
@@ -30,6 +44,81 @@ class ConnectionManager {
 
   bool get _useSecureStorage => secureStorage != null;
 
+  /// One-time migration: moves secrets (API key, dashboard credentials,
+  /// Cloudflare Access credentials) from SharedPreferences to SecureStorage
+  /// for connections that were saved before the secure-storage change.
+  ///
+  /// After migration, the secrets are stripped from the prefs JSON so that
+  /// only [SecureStorage] holds them going forward.
+  Future<void> migrateSecretsToSecureStorage() async {
+    if (!_useSecureStorage) return;
+    final jsonList = prefs.getStringList(_key) ?? [];
+    if (jsonList.isEmpty) return;
+
+    final migrated = <SavedConnection>[];
+    var changed = false;
+
+    for (final j in jsonList) {
+      final map = jsonDecode(j) as Map<String, dynamic>;
+      final connId = map['id'] as String? ?? '';
+      if (connId.isEmpty) {
+        migrated.add(SavedConnection.fromMap(map));
+        continue;
+      }
+
+      final apiKey = map['api_key'] as String?;
+      final dashUser = map['dashboard_username'] as String?;
+      final dashPass = map['dashboard_password'] as String?;
+      final cfClientId = map['cf_access_client_id'] as String?;
+      final cfClientSecret = map['cf_access_client_secret'] as String?;
+
+      final hasSecretsInPrefs = (apiKey != null && apiKey.isNotEmpty) ||
+          (dashUser != null && dashUser.isNotEmpty) ||
+          (dashPass != null && dashPass.isNotEmpty) ||
+          (cfClientId != null && cfClientId.isNotEmpty) ||
+          (cfClientSecret != null && cfClientSecret.isNotEmpty);
+
+      if (hasSecretsInPrefs) {
+        final existingApiKey = await secureStorage!.readApiKey(connId);
+        final existingDash =
+            await secureStorage!.readDashboardCredentials(connId);
+        final existingCf =
+            await secureStorage!.readCfAccessCredentials(connId);
+
+        await secureStorage!.writeConnectionSecrets(
+          connectionId: connId,
+          apiKey: existingApiKey?.isNotEmpty == true
+              ? existingApiKey
+              : apiKey,
+          dashboardUsername: existingDash.username?.isNotEmpty == true
+              ? existingDash.username
+              : dashUser,
+          dashboardPassword: existingDash.password?.isNotEmpty == true
+              ? existingDash.password
+              : dashPass,
+          cfAccessClientId: existingCf.clientId?.isNotEmpty == true
+              ? existingCf.clientId
+              : cfClientId,
+          cfAccessClientSecret: existingCf.clientSecret?.isNotEmpty == true
+              ? existingCf.clientSecret
+              : cfClientSecret,
+        );
+        changed = true;
+      }
+
+      map.remove('api_key');
+      map.remove('dashboard_username');
+      map.remove('dashboard_password');
+      map.remove('cf_access_client_id');
+      map.remove('cf_access_client_secret');
+      migrated.add(SavedConnection.fromMap(map));
+    }
+
+    if (changed) {
+      _saveAll(migrated);
+    }
+  }
+
   /// Returns connections from prefs. When [secureStorage] is active,
   /// secrets (API key, dashboard username/password) are stripped from the
   /// prefs map and must be loaded via [getConnectionsWithSecrets].
@@ -41,6 +130,8 @@ class ConnectionManager {
         map.remove('api_key');
         map.remove('dashboard_username');
         map.remove('dashboard_password');
+        map.remove('cf_access_client_id');
+        map.remove('cf_access_client_secret');
       }
       return SavedConnection.fromMap(map);
     }).toList();
@@ -56,10 +147,13 @@ class ConnectionManager {
     for (final conn in connections) {
       final apiKey = await secureStorage!.readApiKey(conn.id);
       final creds = await secureStorage!.readDashboardCredentials(conn.id);
+      final cfCreds = await secureStorage!.readCfAccessCredentials(conn.id);
       result.add(conn.copyWith(
         apiKey: apiKey ?? '',
         dashboardUsername: creds.username,
         dashboardPassword: creds.password,
+        cfAccessClientId: cfCreds.clientId,
+        cfAccessClientSecret: cfCreds.clientSecret,
       ));
     }
     return result;
@@ -76,6 +170,8 @@ class ConnectionManager {
     int? dashboardPort,
     String? dashboardUsername,
     String? dashboardPassword,
+    String? cfAccessClientId,
+    String? cfAccessClientSecret,
   }) async {
     final normalized = SavedConnection.normalizeHostAndPort(host, port);
     final id = _uuid.v4();
@@ -92,6 +188,8 @@ class ConnectionManager {
       dashboardPortOverride: dashboardPort,
       dashboardUsername: dashboardUsername,
       dashboardPassword: dashboardPassword,
+      cfAccessClientId: cfAccessClientId,
+      cfAccessClientSecret: cfAccessClientSecret,
     );
     if (_useSecureStorage) {
       await secureStorage!.writeConnectionSecrets(
@@ -99,6 +197,8 @@ class ConnectionManager {
         apiKey: apiKey,
         dashboardUsername: dashboardUsername,
         dashboardPassword: dashboardPassword,
+        cfAccessClientId: cfAccessClientId,
+        cfAccessClientSecret: cfAccessClientSecret,
       );
     }
     final current = getConnections();
@@ -116,6 +216,8 @@ class ConnectionManager {
     String? gatewayPrefix,
     String? dashboardPrefix,
     bool? dashboardProxied,
+    String? cfAccessClientId,
+    String? cfAccessClientSecret,
   }) async {
     final current = getConnections();
     final idx = current.indexWhere((c) => c.id == connId);
@@ -124,6 +226,8 @@ class ConnectionManager {
     final p = password.trim();
     final gateway = gatewayPrefix?.trim();
     final dashboard = dashboardPrefix?.trim();
+    final cfId = cfAccessClientId?.trim();
+    final cfSecret = cfAccessClientSecret?.trim();
     current[idx] = current[idx].copyWith(
       gatewayPrefix: gateway == null || gateway.isEmpty ? null : gateway,
       clearGatewayPrefix: gateway != null && gateway.isEmpty,
@@ -138,12 +242,18 @@ class ConnectionManager {
       clearDashboardUsername: u.isEmpty,
       dashboardPassword: p.isEmpty ? null : p,
       clearDashboardPassword: p.isEmpty,
+      cfAccessClientId: cfId == null || cfId.isEmpty ? null : cfId,
+      clearCfAccessClientId: cfId != null && cfId.isEmpty,
+      cfAccessClientSecret: cfSecret == null || cfSecret.isEmpty ? null : cfSecret,
+      clearCfAccessClientSecret: cfSecret != null && cfSecret.isEmpty,
     );
     if (_useSecureStorage) {
       await secureStorage!.writeConnectionSecrets(
         connectionId: connId,
         dashboardUsername: u.isEmpty ? null : u,
         dashboardPassword: p.isEmpty ? null : p,
+        cfAccessClientId: cfId == null || cfId.isEmpty ? null : cfId,
+        cfAccessClientSecret: cfSecret == null || cfSecret.isEmpty ? null : cfSecret,
       );
     }
     _saveAll(current);
@@ -179,6 +289,8 @@ class ConnectionManager {
         map.remove('api_key');
         map.remove('dashboard_username');
         map.remove('dashboard_password');
+        map.remove('cf_access_client_id');
+        map.remove('cf_access_client_secret');
       }
       return jsonEncode(map);
     }).toList();
@@ -193,20 +305,30 @@ class ApiClient {
   final http.Client _http;
   final String baseUrl;
   final String _apiKey;
+  final String? _cfAccessClientId;
+  final String? _cfAccessClientSecret;
 
   // Keep the public parameter name `apiKey` while storing it privately.
   ApiClient({
     required String baseUrl,
     required String apiKey,
     String pathPrefix = '',
+    String? cfAccessClientId,
+    String? cfAccessClientSecret,
     http.Client? httpClient,
   }) : _apiKey = apiKey,
+       _cfAccessClientId = cfAccessClientId,
+       _cfAccessClientSecret = cfAccessClientSecret,
        baseUrl = SavedConnection.joinBaseUrl(baseUrl, pathPrefix),
        _http = httpClient ?? http.Client();
 
   Map<String, String> get _headers => {
     'Authorization': 'Bearer $_apiKey',
     'Content-Type': 'application/json',
+    if (_cfAccessClientId != null && _cfAccessClientId.isNotEmpty)
+      'CF-Access-Client-Id': _cfAccessClientId,
+    if (_cfAccessClientSecret != null && _cfAccessClientSecret.isNotEmpty)
+      'CF-Access-Client-Secret': _cfAccessClientSecret,
   };
 
   // ── Session listing ──────────────────────────────────────────────────
@@ -232,7 +354,7 @@ class ApiClient {
   Future<void> deleteSession(String sessionId) async {
     final res = await _http.delete(
       Uri.parse('$baseUrl/api/sessions/$sessionId'),
-      headers: _headers,
+      headers: _headers,s
     );
     if (res.statusCode < 200 || res.statusCode >= 300) {
       throw Exception('HTTP ${res.statusCode}: ${res.body}');
@@ -291,22 +413,67 @@ class ApiClient {
   // ── Health check ─────────────────────────────────────────────────────
 
   Future<bool> healthCheck() async {
+    final result = await healthCheckDetail();
+    return result.ok;
+  }
+
+  /// Like [healthCheck] but returns detailed error info for better UX.
+  Future<HealthCheckResult> healthCheckDetail() async {
     try {
       final health = await _http
           .get(Uri.parse('$baseUrl/health'), headers: _headers)
           .timeout(const Duration(seconds: 5));
-      if (health.statusCode == 401 || health.statusCode == 403) return false;
-      if (health.statusCode != 200) return false;
+      if (health.statusCode == 401 || health.statusCode == 403) {
+        return HealthCheckResult(
+          ok: false,
+          statusCode: health.statusCode,
+          message: 'Authentication failed (HTTP ${health.statusCode}). '
+              'Check that the API key matches API_SERVER_KEY on the server.',
+        );
+      }
+      if (health.statusCode != 200) {
+        return HealthCheckResult(
+          ok: false,
+          statusCode: health.statusCode,
+          message: 'Server returned HTTP ${health.statusCode} on /health.',
+        );
+      }
 
-      // /health may be intentionally public on some deployments. Confirm that
-      // the saved API key can also reach an authenticated endpoint before the
-      // add/update connection dialogs accept it as valid.
       final sessions = await _http
           .get(Uri.parse('$baseUrl/api/sessions'), headers: _headers)
           .timeout(const Duration(seconds: 5));
-      return sessions.statusCode == 200;
-    } catch (_) {
-      return false;
+      if (sessions.statusCode == 401 || sessions.statusCode == 403) {
+        return HealthCheckResult(
+          ok: false,
+          statusCode: sessions.statusCode,
+          message: 'Authentication failed (HTTP ${sessions.statusCode}). '
+              'Check that the API key matches API_SERVER_KEY on the server.',
+        );
+      }
+      if (sessions.statusCode != 200) {
+        return HealthCheckResult(
+          ok: false,
+          statusCode: sessions.statusCode,
+          message: 'Server returned HTTP ${sessions.statusCode} on /api/sessions.',
+        );
+      }
+      return const HealthCheckResult(ok: true);
+    } on TimeoutException {
+      return HealthCheckResult(
+        ok: false,
+        message: 'Connection timed out. Check host/port and network reachability.',
+      );
+    } on SocketException catch (e) {
+      return HealthCheckResult(
+        ok: false,
+        message: 'Network error: ${e.message}. '
+            'Check host/port and that the server is running.',
+      );
+    } catch (e) {
+      return HealthCheckResult(
+        ok: false,
+        message: 'Connection failed: $e',
+      );
     }
   }
 
@@ -495,6 +662,8 @@ class ApiClient {
       ApiClient(
         baseUrl: baseUrl,
         apiKey: _apiKey,
+        cfAccessClientId: _cfAccessClientId,
+        cfAccessClientSecret: _cfAccessClientSecret,
         httpClient: _http,
       ),
       runId,
@@ -771,6 +940,8 @@ class DashboardClient {
   final bool _proxied;
   final String? _username;
   final String? _password;
+  final String? _cfAccessClientId;
+  final String? _cfAccessClientSecret;
   String? _token;
   String? _cookie;
   // In-flight auth requests, shared so concurrent /api calls trigger a single
@@ -792,10 +963,14 @@ class DashboardClient {
     bool proxied = false,
     String? username,
     String? password,
+    String? cfAccessClientId,
+    String? cfAccessClientSecret,
     http.Client? httpClient,
   }) : _proxied = proxied,
        _username = username,
        _password = password,
+       _cfAccessClientId = cfAccessClientId,
+       _cfAccessClientSecret = cfAccessClientSecret,
        _baseUrl = SavedConnection.joinBaseUrl(
          '${useHttps ? 'https' : 'http'}://$host:$port',
          pathPrefix,
@@ -819,11 +994,21 @@ class DashboardClient {
 
   /// Logs in against the `basic` password provider and caches the session
   /// cookie. Throws on failure (bad credentials → 401, etc.).
+  Map<String, String> get _cfAccessHeaders => {
+    if (_cfAccessClientId != null && _cfAccessClientId.isNotEmpty)
+      'CF-Access-Client-Id': _cfAccessClientId,
+    if (_cfAccessClientSecret != null && _cfAccessClientSecret.isNotEmpty)
+      'CF-Access-Client-Secret': _cfAccessClientSecret,
+  };
+
   Future<String> _login() async {
     try {
       final res = await _http.post(
         Uri.parse('$_baseUrl/auth/password-login'),
-        headers: const {'Content-Type': 'application/json'},
+        headers: {
+          'Content-Type': 'application/json',
+          ..._cfAccessHeaders,
+        },
         body: jsonEncode({
           'provider': 'basic',
           'username': _username,
@@ -866,7 +1051,10 @@ class DashboardClient {
 
   Future<String> _fetchToken() async {
     try {
-      final res = await _http.get(Uri.parse('$_baseUrl/'));
+      final res = await _http.get(
+        Uri.parse('$_baseUrl/'),
+        headers: _cfAccessHeaders,
+      );
       if (res.statusCode != 200) throw Exception('Dashboard not reachable');
       final match = RegExp(
         r'window\.__HERMES_SESSION_TOKEN__="([^"]+)";',
@@ -880,13 +1068,20 @@ class DashboardClient {
   }
 
   Future<Map<String, String>> _authHeaders() async {
-    if (_proxied) return {'Content-Type': 'application/json'};
+    if (_proxied) {
+      return {'Content-Type': 'application/json', ..._cfAccessHeaders};
+    }
     if (_usesPasswordAuth) {
-      return {'Cookie': await _getCookie(), 'Content-Type': 'application/json'};
+      return {
+        'Cookie': await _getCookie(),
+        'Content-Type': 'application/json',
+        ..._cfAccessHeaders,
+      };
     }
     return {
       'X-Hermes-Session-Token': await _getToken(),
       'Content-Type': 'application/json',
+      ..._cfAccessHeaders,
     };
   }
 

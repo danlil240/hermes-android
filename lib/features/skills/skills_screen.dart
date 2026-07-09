@@ -27,6 +27,8 @@ class _SkillsScreenState extends State<SkillsScreen> {
       useHttps: widget.connection.useHttps,
       username: widget.connection.dashboardUsername,
       password: widget.connection.dashboardPassword,
+      cfAccessClientId: widget.connection.cfAccessClientId,
+      cfAccessClientSecret: widget.connection.cfAccessClientSecret,
     );
     _load();
   }

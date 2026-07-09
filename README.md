@@ -322,10 +322,15 @@ Then in `config.yml`, use `http://host.docker.internal:8642` and `http://host.do
 
 ```bash
 # Gateway (should return sessions JSON)
-curl https://hermes-api.your-domain.com/api/sessions -H "Authorization: Bearer <API_SERVER_KEY>"
+curl https://hermes-api.your-domain.com/api/sessions \
+  -H "Authorization: Bearer <API_SERVER_KEY>" \
+  -H "CF-Access-Client-Id: <CF_CLIENT_ID>" \
+  -H "CF-Access-Client-Secret: <CF_CLIENT_SECRET>"
 
 # Dashboard (should return model info JSON)
-curl https://hermes-api.your-domain.com/api/model/info
+curl https://hermes-api.your-domain.com/api/model/info \
+  -H "CF-Access-Client-Id: <CF_CLIENT_ID>" \
+  -H "CF-Access-Client-Secret: <CF_CLIENT_SECRET>"
 ```
 
 ### 7. Point the app at it
@@ -338,6 +343,8 @@ In the app's **Add Connection** dialog:
 | **Host** | `https://hermes-api.your-domain.com` |
 | **Port** | leave blank (defaults to 443 for HTTPS) |
 | **API Key** | `API_SERVER_KEY` from the Hermes machine |
+| **CF Access Client ID** | Service Token Client ID from Cloudflare Access |
+| **CF Access Client Secret** | Service Token Client Secret from Cloudflare Access |
 
 For dashboard drawer features (Memory, Cron, Skills, Settings), configure auth via **⋮ → Dashboard / Proxy Settings**:
 
@@ -345,10 +352,30 @@ For dashboard drawer features (Memory, Cron, Skills, Settings), configure auth v
 - If the dashboard runs with **`--insecure`** (no auth): enable **Dashboard behind proxy** so the app sends clean requests without trying to scrape a session token.
 - **Dashboard Port**: leave blank — for HTTPS connections the app uses the same port as the gateway (443).
 
+### Cloudflare Access service tokens
+
+When Cloudflare Access protects your tunnel, every request must include `CF-Access-Client-Id` and `CF-Access-Client-Secret` headers or Cloudflare returns **403 Forbidden**. The app sends these headers on every Gateway API and Dashboard request when the fields are filled in.
+
+**Three-layer protection:**
+
+1. **Cloudflare Access service token** — `CF-Access-Client-Id` + `CF-Access-Client-Secret` headers let the request through Cloudflare Access.
+2. **Hermes API key** — `Authorization: Bearer <API_SERVER_KEY>` header authenticates against the Gateway API Server.
+3. **Cloudflare Tunnel** — encrypted connection from Cloudflare's edge to your home PC, no open ports.
+
+**Creating a service token in Cloudflare Access:**
+
+1. Go to **Cloudflare Zero Trust → Access → Service Tokens**.
+2. Click **Create Service Token**.
+3. Copy the **Client ID** and **Client Secret** (shown only once).
+4. Create an Access policy that requires the service token for your Hermes hostname.
+
+Enter the Client ID and Client Secret in the app's **Add Connection** dialog (or **⋮ → Dashboard / Proxy Settings** for existing connections). The app stores them securely and sends them as headers on every request.
+
 ### Cloudflare Tunnel security notes
 
 - Keep the Gateway API key required even behind Cloudflare — do not rely on URL obscurity.
-- Optional hardening: Cloudflare Access, mTLS, IP allowlist.
+- Cloudflare Access service tokens add an authentication layer in front of the tunnel — use them for production deployments.
+- Optional additional hardening: mTLS, IP allowlist.
 - See [`docs/CLOUD_FLARE_TUNNEL.md`](docs/CLOUD_FLARE_TUNNEL.md) for a concise setup reference.
 
 ## Connect over HTTPS

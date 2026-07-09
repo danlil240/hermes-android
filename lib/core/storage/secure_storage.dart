@@ -65,16 +65,28 @@ class SecureStorage {
   static String dashPassKey(String connectionId) =>
       'conn_$connectionId.dash_pass';
 
+  /// Storage key for a connection's Cloudflare Access Client ID.
+  static String cfAccessClientIdKey(String connectionId) =>
+      'conn_$connectionId.cf_access_client_id';
+
+  /// Storage key for a connection's Cloudflare Access Client Secret.
+  static String cfAccessClientSecretKey(String connectionId) =>
+      'conn_$connectionId.cf_access_client_secret';
+
   /// Stores all secrets for a connection.
   Future<void> writeConnectionSecrets({
     required String connectionId,
     String? apiKey,
     String? dashboardUsername,
     String? dashboardPassword,
+    String? cfAccessClientId,
+    String? cfAccessClientSecret,
   }) async {
     await write(apiKeyKey(connectionId), apiKey);
     await write(dashUserKey(connectionId), dashboardUsername);
     await write(dashPassKey(connectionId), dashboardPassword);
+    await write(cfAccessClientIdKey(connectionId), cfAccessClientId);
+    await write(cfAccessClientSecretKey(connectionId), cfAccessClientSecret);
   }
 
   /// Reads the API key for a connection.
@@ -90,10 +102,21 @@ class SecureStorage {
     return (username: username, password: password);
   }
 
+  /// Reads Cloudflare Access service-token credentials for a connection.
+  Future<({String? clientId, String? clientSecret})> readCfAccessCredentials(
+    String connectionId,
+  ) async {
+    final clientId = await read(cfAccessClientIdKey(connectionId));
+    final clientSecret = await read(cfAccessClientSecretKey(connectionId));
+    return (clientId: clientId, clientSecret: clientSecret);
+  }
+
   /// Deletes all secrets for a connection.
   Future<void> deleteConnectionSecrets(String connectionId) async {
     await delete(apiKeyKey(connectionId));
     await delete(dashUserKey(connectionId));
     await delete(dashPassKey(connectionId));
+    await delete(cfAccessClientIdKey(connectionId));
+    await delete(cfAccessClientSecretKey(connectionId));
   }
 }

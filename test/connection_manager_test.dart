@@ -248,6 +248,51 @@ void main() {
       client.close();
     });
 
+    test('sends CF Access headers when credentials are provided', () async {
+      final client = ApiClient(
+        baseUrl: 'http://hermes.local:8642',
+        apiKey: 'valid-key',
+        cfAccessClientId: 'cf-id-123',
+        cfAccessClientSecret: 'cf-secret-456',
+        httpClient: MockClient((request) async {
+          expect(_header(request, 'cf-access-client-id'), 'cf-id-123');
+          expect(_header(request, 'cf-access-client-secret'), 'cf-secret-456');
+          expect(request.headers['authorization'], 'Bearer valid-key');
+          if (request.url.path == '/health') {
+            return http.Response('{}', 200);
+          }
+          if (request.url.path == '/api/sessions') {
+            return http.Response('{"object":"list","data":[]}', 200);
+          }
+          return http.Response('not found', 404);
+        }),
+      );
+
+      expect(await client.healthCheck(), isTrue);
+      client.close();
+    });
+
+    test('omits CF Access headers when credentials are null', () async {
+      final client = ApiClient(
+        baseUrl: 'http://hermes.local:8642',
+        apiKey: 'valid-key',
+        httpClient: MockClient((request) async {
+          expect(_header(request, 'cf-access-client-id'), isNull);
+          expect(_header(request, 'cf-access-client-secret'), isNull);
+          if (request.url.path == '/health') {
+            return http.Response('{}', 200);
+          }
+          if (request.url.path == '/api/sessions') {
+            return http.Response('{"object":"list","data":[]}', 200);
+          }
+          return http.Response('not found', 404);
+        }),
+      );
+
+      expect(await client.healthCheck(), isTrue);
+      client.close();
+    });
+
     test('healthCheck rejects invalid API keys', () async {
       final client = ApiClient(
         baseUrl: 'http://hermes.local:8642',
@@ -479,6 +524,36 @@ void main() {
       );
 
       expect(client.getModelInfo(), throwsA(isA<Exception>()));
+      client.close();
+    });
+
+    test('sends CF Access headers on dashboard API calls', () async {
+      final client = DashboardClient(
+        host: 'hermes.local',
+        port: 9119,
+        cfAccessClientId: 'cf-id-789',
+        cfAccessClientSecret: 'cf-secret-012',
+        httpClient: MockClient((request) async {
+          if (request.url.path == '/') {
+            expect(_header(request, 'cf-access-client-id'), 'cf-id-789');
+            expect(_header(request, 'cf-access-client-secret'), 'cf-secret-012');
+            return http.Response(
+              '<script>window.__HERMES_SESSION_TOKEN__="SPA_TOK";</script>',
+              200,
+            );
+          }
+          if (request.url.path == '/api/model/info') {
+            expect(_header(request, 'cf-access-client-id'), 'cf-id-789');
+            expect(_header(request, 'cf-access-client-secret'), 'cf-secret-012');
+            expect(_header(request, 'x-hermes-session-token'), 'SPA_TOK');
+            return http.Response('{"model":"hermes-agent"}', 200);
+          }
+          return http.Response('not found', 404);
+        }),
+      );
+
+      final info = await client.getModelInfo();
+      expect(info['model'], 'hermes-agent');
       client.close();
     });
   });

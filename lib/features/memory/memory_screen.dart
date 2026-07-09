@@ -35,6 +35,8 @@ class _MemoryScreenState extends State<MemoryScreen> {
       useHttps: widget.connection.useHttps,
       username: widget.connection.dashboardUsername,
       password: widget.connection.dashboardPassword,
+      cfAccessClientId: widget.connection.cfAccessClientId,
+      cfAccessClientSecret: widget.connection.cfAccessClientSecret,
     );
     _loadMemory();
   }

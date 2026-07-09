@@ -28,6 +28,8 @@ class _DiagnosticsScreenState extends State<DiagnosticsScreen> {
       baseUrl: widget.connection.baseUrl,
       apiKey: widget.connection.apiKey,
       pathPrefix: widget.connection.gatewayPrefix ?? '',
+      cfAccessClientId: widget.connection.cfAccessClientId,
+      cfAccessClientSecret: widget.connection.cfAccessClientSecret,
     );
     _load();
   }
