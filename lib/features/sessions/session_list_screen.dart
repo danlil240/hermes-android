@@ -1,6 +1,9 @@
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
+import 'dart:async';
 import '../../core/network/connection_manager.dart';
+import '../../shared/errors/error_messages.dart';
+import '../../shared/responsive.dart';
 import '../chat/chat_screen.dart';
 import '../settings/settings_screen.dart';
 import '../memory/memory_screen.dart';
@@ -23,6 +26,18 @@ class _SessionListScreenState extends State<SessionListScreen> {
   bool _loading = true;
   String? _error;
   bool _healthOk = false;
+  String _searchQuery = '';
+
+  List<Session> get _filteredSessions {
+    if (_searchQuery.isEmpty) return _sessions;
+    final q = _searchQuery.toLowerCase();
+    return _sessions.where((s) {
+      return s.title.toLowerCase().contains(q) ||
+          s.model.toLowerCase().contains(q) ||
+          s.preview.toLowerCase().contains(q) ||
+          s.id.toLowerCase().contains(q);
+    }).toList();
+  }
 
   @override
   void initState() {
@@ -36,7 +51,17 @@ class _SessionListScreenState extends State<SessionListScreen> {
   }
 
   Future<void> _checkHealth() async {
-    final ok = await _client.healthCheck();
+    bool ok = false;
+    int attempts = 0;
+    const maxAttempts = 3;
+    while (attempts < maxAttempts && !ok) {
+      ok = await _client.healthCheck();
+      if (!ok && attempts < maxAttempts - 1) {
+        await Future.delayed(Duration(seconds: 1 << attempts));
+      }
+      attempts++;
+    }
+    if (!mounted) return;
     setState(() => _healthOk = ok);
     if (ok) _fetchSessions();
   }
@@ -47,11 +72,13 @@ class _SessionListScreenState extends State<SessionListScreen> {
     super.dispose();
   }
 
-  Future<void> _fetchSessions() async {
-    setState(() {
-      _loading = true;
-      _error = null;
-    });
+  Future<void> _fetchSessions({bool isRetry = false}) async {
+    if (!isRetry) {
+      setState(() {
+        _loading = true;
+        _error = null;
+      });
+    }
     try {
       final sessions = await _client.getSessions();
       if (!mounted) return;
@@ -62,9 +89,157 @@ class _SessionListScreenState extends State<SessionListScreen> {
     } catch (e) {
       if (!mounted) return;
       setState(() {
-        _error = e.toString();
+        _error = ErrorMessages.format(e);
         _loading = false;
       });
+      if (!isRetry) {
+        _retryWithBackoff();
+      }
+    }
+  }
+
+  void _retryWithBackoff() {
+    int attempt = 0;
+    Timer.periodic(const Duration(seconds: 2), (timer) async {
+      attempt++;
+      try {
+        final sessions = await _client.getSessions();
+        if (!mounted) {
+          timer.cancel();
+          return;
+        }
+        setState(() {
+          _sessions = sessions;
+          _error = null;
+          _loading = false;
+        });
+        timer.cancel();
+      } catch (_) {
+        if (attempt >= 3) {
+          timer.cancel();
+        }
+      }
+    });
+  }
+
+  Future<void> _deleteSession(Session session) async {
+    try {
+      await _client.deleteSession(session.id);
+      if (!mounted) return;
+      setState(() {
+        _sessions.removeWhere((s) => s.id == session.id);
+      });
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Session "${session.title}" deleted')),
+      );
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Failed to delete session: ${ErrorMessages.format(e)}'),
+          backgroundColor: Colors.red,
+        ),
+      );
+    }
+  }
+
+  void _confirmDeleteSession(Session session) {
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Delete Session?'),
+        content: Text(
+          'Are you sure you want to delete "${session.title}"?\n'
+          'This action cannot be undone.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            style: FilledButton.styleFrom(backgroundColor: Colors.red),
+            onPressed: () {
+              Navigator.pop(ctx);
+              _deleteSession(session);
+            },
+            child: const Text('Delete'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  void _renameSession(Session session) {
+    final controller = TextEditingController(text: session.title);
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Rename Session'),
+        content: TextField(
+          controller: controller,
+          decoration: const InputDecoration(
+            labelText: 'Session title',
+            border: OutlineInputBorder(),
+          ),
+          autofocus: true,
+          onSubmitted: (_) => _doRename(ctx, session, controller.text),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () => _doRename(ctx, session, controller.text),
+            child: const Text('Save'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  void _doRename(BuildContext ctx, Session session, String newTitle) {
+    final title = newTitle.trim();
+    if (title.isEmpty || title == session.title) {
+      Navigator.pop(ctx);
+      return;
+    }
+    Navigator.pop(ctx);
+    _doRenameApi(session, title);
+  }
+
+  Future<void> _doRenameApi(Session session, String newTitle) async {
+    try {
+      await _client.updateSession(session.id, title: newTitle);
+      if (!mounted) return;
+      setState(() {
+        final idx = _sessions.indexWhere((s) => s.id == session.id);
+        if (idx >= 0) {
+          _sessions[idx] = Session(
+            id: session.id,
+            title: newTitle,
+            model: session.model,
+            source: session.source,
+            messageCount: session.messageCount,
+            isActive: session.isActive,
+            preview: session.preview,
+            startedAt: session.startedAt,
+            endedAt: session.endedAt,
+          );
+        }
+      });
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Session renamed to "$newTitle"')),
+      );
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Failed to rename session: ${ErrorMessages.format(e)}'),
+          backgroundColor: Colors.red,
+        ),
+      );
     }
   }
 
@@ -296,58 +471,189 @@ class _SessionListScreenState extends State<SessionListScreen> {
       );
     }
 
-    return RefreshIndicator(
-      onRefresh: _fetchSessions,
-      child: ListView.builder(
-        padding: const EdgeInsets.all(16),
-        itemCount: _sessions.length,
-        itemBuilder: (context, index) {
-          final session = _sessions[index];
-          return Card(
-            margin: const EdgeInsets.only(bottom: 8),
-            child: ListTile(
-              leading: Icon(
-                session.isActive ? Icons.chat : Icons.chat_bubble_outline,
-                color: session.isActive ? const Color(0xFFD4AF37) : Colors.grey,
+    final filtered = _filteredSessions;
+
+    return Column(
+      children: [
+        Padding(
+          padding: const EdgeInsets.all(12),
+          child: TextField(
+            decoration: InputDecoration(
+              hintText: 'Search sessions...',
+              prefixIcon: const Icon(Icons.search),
+              suffixIcon: _searchQuery.isNotEmpty
+                  ? IconButton(
+                      icon: const Icon(Icons.clear),
+                      onPressed: () {
+                        setState(() => _searchQuery = '');
+                      },
+                    )
+                  : null,
+              border: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(12),
               ),
-              title: Text(
-                session.title,
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-              ),
-              subtitle: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
+              contentPadding: const EdgeInsets.symmetric(horizontal: 12),
+            ),
+            onChanged: (value) {
+              setState(() => _searchQuery = value);
+            },
+          ),
+        ),
+        if (filtered.isEmpty)
+          Expanded(
+            child: Center(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
                 children: [
+                  Icon(Icons.search_off, size: 48, color: Colors.grey[400]),
+                  const SizedBox(height: 16),
                   Text(
-                    '${session.messageCount} msgs \u2022 ${session.model} \u2022 ${_formatTime(session.startedAt)}',
-                    style: Theme.of(context).textTheme.bodySmall,
+                    'No sessions match "$_searchQuery"',
+                    style: Theme.of(context).textTheme.bodyMedium,
                   ),
-                  if (session.preview.isNotEmpty)
-                    Text(
-                      session.preview,
-                      maxLines: 2,
-                      overflow: TextOverflow.ellipsis,
-                      style: Theme.of(
-                        context,
-                      ).textTheme.bodySmall?.copyWith(color: Colors.grey[500]),
-                    ),
                 ],
               ),
-              isThreeLine: session.preview.isNotEmpty,
-              onTap: () {
-                Navigator.push(
-                  context,
-                  MaterialPageRoute(
-                    builder: (_) => ChatScreen(
-                      connection: widget.connection,
-                      session: session,
-                    ),
-                  ),
-                );
-              },
             ),
-          );
-        },
+          )
+        else
+          Expanded(
+            child: RefreshIndicator(
+              onRefresh: _fetchSessions,
+              child: Responsive.isTablet(context)
+                  ? GridView.builder(
+                      padding: const EdgeInsets.symmetric(horizontal: 16),
+                      gridDelegate:
+                          const SliverGridDelegateWithMaxCrossAxisExtent(
+                        maxCrossAxisExtent: 400,
+                        childAspectRatio: 2.8,
+                        crossAxisSpacing: 8,
+                        mainAxisSpacing: 8,
+                      ),
+                      itemCount: filtered.length,
+                      itemBuilder: (context, index) =>
+                          _buildSessionCard(filtered[index]),
+                    )
+                  : ListView.builder(
+                      padding: const EdgeInsets.symmetric(horizontal: 16),
+                      itemCount: filtered.length,
+                      itemBuilder: (context, index) =>
+                          _buildSessionCard(filtered[index]),
+                    ),
+            ),
+          ),
+      ],
+    );
+  }
+
+  Widget _buildSessionCard(Session session) {
+    return Dismissible(
+      key: Key(session.id),
+      background: Container(
+        alignment: Alignment.centerLeft,
+        padding: const EdgeInsets.only(left: 20),
+        decoration: BoxDecoration(
+          color: Colors.red,
+          borderRadius: BorderRadius.circular(8),
+        ),
+        child: const Icon(Icons.delete, color: Colors.white),
+      ),
+      secondaryBackground: Container(
+        alignment: Alignment.centerRight,
+        padding: const EdgeInsets.only(right: 20),
+        decoration: BoxDecoration(
+          color: Colors.blue,
+          borderRadius: BorderRadius.circular(8),
+        ),
+        child: const Icon(Icons.edit, color: Colors.white),
+      ),
+      confirmDismiss: (direction) async {
+        if (direction == DismissDirection.startToEnd) {
+          _confirmDeleteSession(session);
+        } else {
+          _renameSession(session);
+        }
+        return false;
+      },
+      child: Card(
+        margin: const EdgeInsets.only(bottom: 8),
+        child: ListTile(
+          leading: Icon(
+            session.isActive
+                ? Icons.chat
+                : Icons.chat_bubble_outline,
+            color: session.isActive
+                ? const Color(0xFFD4AF37)
+                : Colors.grey,
+          ),
+          title: Text(
+            session.title,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+          ),
+          subtitle: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                '${session.messageCount} msgs \u2022 ${session.model} \u2022 ${_formatTime(session.startedAt)}',
+                style: Theme.of(context).textTheme.bodySmall,
+              ),
+              if (session.preview.isNotEmpty)
+                Text(
+                  session.preview,
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                  style: Theme.of(context)
+                      .textTheme
+                      .bodySmall
+                      ?.copyWith(color: Colors.grey[500]),
+                ),
+            ],
+          ),
+          isThreeLine: session.preview.isNotEmpty,
+          trailing: PopupMenuButton<String>(
+            onSelected: (action) {
+              if (action == 'rename') {
+                _renameSession(session);
+              } else if (action == 'delete') {
+                _confirmDeleteSession(session);
+              }
+            },
+            itemBuilder: (ctx) => [
+              const PopupMenuItem(
+                value: 'rename',
+                child: Row(
+                  children: [
+                    Icon(Icons.edit),
+                    SizedBox(width: 8),
+                    Text('Rename'),
+                  ],
+                ),
+              ),
+              const PopupMenuItem(
+                value: 'delete',
+                child: Row(
+                  children: [
+                    Icon(Icons.delete, color: Colors.red),
+                    SizedBox(width: 8),
+                    Text('Delete',
+                        style: TextStyle(color: Colors.red)),
+                  ],
+                ),
+              ),
+            ],
+          ),
+          onTap: () {
+            Navigator.push(
+              context,
+              MaterialPageRoute(
+                builder: (_) => ChatScreen(
+                  connection: widget.connection,
+                  session: session,
+                ),
+              ),
+            );
+          },
+        ),
       ),
     );
   }

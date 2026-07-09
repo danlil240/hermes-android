@@ -3,6 +3,7 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
 import '../../core/network/connection_manager.dart';
+import '../../shared/errors/error_messages.dart';
 import 'service_log_viewer.dart';
 
 class ServicesScreen extends StatefulWidget {
@@ -13,8 +14,10 @@ class ServicesScreen extends StatefulWidget {
   State<ServicesScreen> createState() => _ServicesScreenState();
 }
 
-class _ServicesScreenState extends State<ServicesScreen> {
+class _ServicesScreenState extends State<ServicesScreen>
+    with SingleTickerProviderStateMixin {
   late final ApiClient _client;
+  late final TabController _tabController;
   List<ServiceDefinition> _services = [];
   final Map<String, ServiceRun> _activeRuns = {};
   final Map<String, ServiceRunStreamController> _streamControllers = {};
@@ -23,9 +26,17 @@ class _ServicesScreenState extends State<ServicesScreen> {
   bool _loading = true;
   String? _error;
 
+  // Service run history (audit log)
+  List<ServiceRun> _history = [];
+  bool _historyLoading = false;
+  String? _historyError;
+  int _historyOffset = 0;
+  bool _hasMoreHistory = true;
+
   @override
   void initState() {
     super.initState();
+    _tabController = TabController(length: 2, vsync: this);
     _client = ApiClient(
       baseUrl: widget.connection.baseUrl,
       apiKey: widget.connection.apiKey,
@@ -39,6 +50,7 @@ class _ServicesScreenState extends State<ServicesScreen> {
     for (final ctrl in _streamControllers.values) {
       ctrl.cancel();
     }
+    _tabController.dispose();
     _client.close();
     super.dispose();
   }
@@ -58,8 +70,41 @@ class _ServicesScreenState extends State<ServicesScreen> {
     } catch (e) {
       if (!mounted) return;
       setState(() {
-        _error = e.toString();
+        _error = ErrorMessages.format(e);
         _loading = false;
+      });
+    }
+  }
+
+  Future<void> _loadHistory({bool reset = true}) async {
+    if (_historyLoading) return;
+    setState(() {
+      _historyLoading = true;
+      if (reset) {
+        _historyError = null;
+        _historyOffset = 0;
+        _hasMoreHistory = true;
+      }
+    });
+    try {
+      final offset = reset ? 0 : _historyOffset;
+      final runs = await _client.getServiceRuns(limit: 50, offset: offset);
+      if (!mounted) return;
+      setState(() {
+        if (reset) {
+          _history = runs;
+        } else {
+          _history.addAll(runs);
+        }
+        _historyOffset = offset + runs.length;
+        _hasMoreHistory = runs.length >= 50;
+        _historyLoading = false;
+      });
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _historyError = ErrorMessages.format(e);
+        _historyLoading = false;
       });
     }
   }
@@ -466,8 +511,21 @@ class _ServicesScreenState extends State<ServicesScreen> {
             onPressed: _loading ? null : _load,
           ),
         ],
+        bottom: TabBar(
+          controller: _tabController,
+          tabs: const [
+            Tab(text: 'Services', icon: Icon(Icons.build_outlined)),
+            Tab(text: 'History', icon: Icon(Icons.history)),
+          ],
+        ),
       ),
-      body: _buildBody(),
+      body: TabBarView(
+        controller: _tabController,
+        children: [
+          _buildBody(),
+          _buildHistoryTab(),
+        ],
+      ),
     );
   }
 
@@ -550,6 +608,205 @@ class _ServicesScreenState extends State<ServicesScreen> {
             return _buildCategorySection(entry.key, entry.value);
           }),
         ],
+      ),
+    );
+  }
+
+  Widget _buildHistoryTab() {
+    if (_history.isEmpty && _historyLoading) {
+      return const Center(child: CircularProgressIndicator());
+    }
+
+    if (_history.isEmpty && _historyError != null) {
+      return Center(
+        child: Padding(
+          padding: const EdgeInsets.all(32),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const Icon(Icons.error_outline, size: 48, color: Colors.orange),
+              const SizedBox(height: 16),
+              Text(
+                'Failed to load history',
+                style: Theme.of(context).textTheme.titleMedium,
+              ),
+              const SizedBox(height: 8),
+              Text(
+                _historyError!,
+                style: Theme.of(context).textTheme.bodySmall,
+                textAlign: TextAlign.center,
+              ),
+              const SizedBox(height: 24),
+              ElevatedButton(
+                onPressed: () => _loadHistory(),
+                child: const Text('Retry'),
+              ),
+            ],
+          ),
+        ),
+      );
+    }
+
+    if (_history.isEmpty) {
+      return Center(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(Icons.history, size: 48, color: Colors.grey[600]),
+            const SizedBox(height: 16),
+            Text(
+              'No service run history',
+              style: Theme.of(context).textTheme.titleLarge,
+            ),
+            const SizedBox(height: 8),
+            Text(
+              'Past service runs will appear here once available.',
+              style: Theme.of(context).textTheme.bodyMedium,
+              textAlign: TextAlign.center,
+            ),
+            const SizedBox(height: 24),
+              ElevatedButton(
+                onPressed: () => _loadHistory(),
+                child: const Text('Load History'),
+              ),
+          ],
+        ),
+      );
+    }
+
+    return RefreshIndicator(
+      onRefresh: () => _loadHistory(reset: true),
+      child: NotificationListener<ScrollNotification>(
+        onNotification: (notification) {
+          if (notification is ScrollEndNotification &&
+              notification.metrics.pixels >=
+                  notification.metrics.maxScrollExtent - 100 &&
+              _hasMoreHistory &&
+              !_historyLoading) {
+            _loadHistory(reset: false);
+          }
+          return false;
+        },
+        child: ListView.builder(
+          padding: const EdgeInsets.all(16),
+          itemCount: _history.length + 1,
+          itemBuilder: (context, index) {
+            if (index == _history.length) {
+              if (_historyLoading) {
+                return const Padding(
+                  padding: EdgeInsets.all(16),
+                  child: Center(child: CircularProgressIndicator()),
+                );
+              }
+              if (!_hasMoreHistory) {
+                return const Padding(
+                  padding: EdgeInsets.all(16),
+                  child: Center(
+                    child: Text(
+                      'No more history',
+                      style: TextStyle(color: Colors.grey),
+                    ),
+                  ),
+                );
+              }
+              return const SizedBox.shrink();
+            }
+            return _buildHistoryCard(_history[index]);
+          },
+        ),
+      ),
+    );
+  }
+
+  Widget _buildHistoryCard(ServiceRun run) {
+    final statusColor = run.isCompleted
+        ? Colors.green
+        : run.isFailed
+            ? Colors.red
+            : run.isCancelled
+                ? Colors.orange
+                : Colors.blue;
+    final statusIcon = run.isCompleted
+        ? Icons.check_circle
+        : run.isFailed
+            ? Icons.error
+            : run.isCancelled
+                ? Icons.cancel
+                : Icons.sync;
+
+    String formatTime(DateTime? dt) {
+      if (dt == null) return '—';
+      final now = DateTime.now();
+      final diff = now.difference(dt);
+      if (diff.inMinutes < 1) return 'just now';
+      if (diff.inMinutes < 60) return '${diff.inMinutes}m ago';
+      if (diff.inHours < 24) return '${diff.inHours}h ago';
+      if (diff.inDays < 7) return '${diff.inDays}d ago';
+      return '${dt.day}/${dt.month}/${dt.year}';
+    }
+
+    return Card(
+      margin: const EdgeInsets.only(bottom: 8),
+      child: ListTile(
+        leading: Icon(statusIcon, color: statusColor),
+        title: Text(run.serviceId),
+        subtitle: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                Container(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 8,
+                    vertical: 2,
+                  ),
+                  decoration: BoxDecoration(
+                    color: statusColor.withValues(alpha: 0.15),
+                    borderRadius: BorderRadius.circular(4),
+                  ),
+                  child: Text(
+                    run.status.name,
+                    style: TextStyle(
+                      fontSize: 11,
+                      color: statusColor,
+                      fontWeight: FontWeight.bold,
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 8),
+                Text(
+                  formatTime(run.startedAt ?? run.createdAt),
+                  style: TextStyle(
+                    fontSize: 12,
+                    color: Colors.grey[600],
+                  ),
+                ),
+              ],
+            ),
+            if (run.resultSummary != null &&
+                run.resultSummary!.isNotEmpty) ...[
+              const SizedBox(height: 4),
+              Text(
+                run.resultSummary!,
+                maxLines: 2,
+                overflow: TextOverflow.ellipsis,
+                style: const TextStyle(fontSize: 12),
+              ),
+            ],
+          ],
+        ),
+        isThreeLine: run.resultSummary != null &&
+            run.resultSummary!.isNotEmpty,
+        trailing: run.duration != null
+            ? Text(
+                '${run.duration!.inSeconds}s',
+                style: TextStyle(
+                  fontSize: 12,
+                  color: Colors.grey[600],
+                ),
+              )
+            : null,
+        onTap: () => _showRunResult(run),
       ),
     );
   }

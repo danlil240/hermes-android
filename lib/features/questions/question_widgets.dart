@@ -331,14 +331,17 @@ class _MultipleChoiceCardState extends State<_MultipleChoiceCard> {
         children: [
           ...q.options.map((option) {
             final isSelected = selectedIds.contains(option.id);
-            return CheckboxListTile(
-              value: isSelected,
-              onChanged: widget.enabled ? (_) => _toggle(option.id) : null,
-              title: Text(option.label),
-              dense: true,
-              contentPadding: EdgeInsets.zero,
-              controlAffinity: ListTileControlAffinity.leading,
-              activeColor: const Color(0xFFD4AF37),
+            return Material(
+              color: Colors.transparent,
+              child: CheckboxListTile(
+                value: isSelected,
+                onChanged: widget.enabled ? (_) => _toggle(option.id) : null,
+                title: Text(option.label),
+                dense: true,
+                contentPadding: EdgeInsets.zero,
+                controlAffinity: ListTileControlAffinity.leading,
+                activeColor: const Color(0xFFD4AF37),
+              ),
             );
           }),
           if (q.minSelected != null || q.maxSelected != null) ...[

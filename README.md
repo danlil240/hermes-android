@@ -1,6 +1,6 @@
 # Hermes Android
 
-Android client for [Hermes Agent](https://hermes-agent.nousresearch.com/) — chat with your Hermes sessions from a phone or tablet over local Wi-Fi or a private Tailscale network.
+Android client for [Hermes Agent](https://hermes-agent.nousresearch.com/) — chat with your Hermes sessions from a phone or tablet over local Wi-Fi, a private Tailscale network, or a Cloudflare Tunnel.
 
 ## Current release
 
@@ -69,9 +69,10 @@ Android client for [Hermes Agent](https://hermes-agent.nousresearch.com/) — ch
 
 - Android device or emulator (Android 8+).
 - Hermes Agent installed on the host machine.
-- Hermes Gateway API Server reachable from the Android device.
+- Hermes Gateway API Server reachable from the Android device — via LAN, Tailscale, or Cloudflare Tunnel.
 - `API_SERVER_KEY` from the Hermes host environment (`~/.hermes/.env`).
 - Optional: Hermes dashboard reachable for Memory/Cron/Skills/Settings screens.
+- For development: Flutter SDK, Android Studio (or Android SDK + command-line tools).
 
 Hermes Agent docs: <https://hermes-agent.nousresearch.com/docs>
 
@@ -213,6 +214,143 @@ In the Android app connection dialog:
 
 If using Memory/Cron/Skills/Settings remotely, keep the dashboard reachable on the same Tailscale host at port `9119`.
 
+## Connect over Cloudflare Tunnel
+
+Cloudflare Tunnel exposes your home-PC Hermes to the internet over HTTPS without router port forwarding or VPN. The Android app connects to a public URL (e.g. `https://hermes-api.your-domain.com`) and Cloudflare routes traffic through the tunnel to your Hermes Gateway and dashboard.
+
+```text
+Android app → HTTPS → Cloudflare public hostname → tunnel → Home PC Hermes
+```
+
+### 1. Install cloudflared
+
+Install `cloudflared` on the Hermes host machine. See the official guide: <https://developers.cloudflare.com/tunnel/setup/>
+
+### 2. Create a tunnel
+
+```bash
+cloudflared tunnel login
+cloudflared tunnel create hermes-home
+# note the tunnel UUID and credentials JSON path
+```
+
+### 3. Configure ingress with path-based routing
+
+The Gateway API (port `8642`) and the dashboard (port `9119`) run on different ports. Use path-based ingress rules to route requests to the correct backend:
+
+`/etc/cloudflared/config.yml` (or `./cloudflared/config.yml` if running in Docker):
+
+```yaml
+tunnel: hermes-home
+credentials-file: /etc/cloudflared/<UUID>.json
+
+ingress:
+  # Gateway API routes → port 8642
+  - hostname: hermes-api.your-domain.com
+    path: /api/sessions*
+    service: http://hermes-gateway:8642
+  - hostname: hermes-api.your-domain.com
+    path: /v1/*
+    service: http://hermes-gateway:8642
+
+  # Dashboard routes (everything else) → port 9119
+  - hostname: hermes-api.your-domain.com
+    service: http://hermes-gateway:9119
+
+  - service: http_status:404
+```
+
+> Replace `hermes-gateway` with your actual container name (if using Docker) or `localhost` (if running directly on the host).
+
+### 4. Route DNS and start the tunnel
+
+```bash
+cloudflared tunnel route dns hermes-home hermes-api.your-domain.com
+cloudflared tunnel run hermes-home
+
+# Or install as a persistent service:
+sudo cloudflared service install
+```
+
+### 5. Run cloudflared in Docker (bridge network)
+
+If `cloudflared` runs in a Docker container on a bridge network, `localhost` inside the container refers to the container itself — not the host. Use one of these approaches:
+
+**Same Docker network (recommended):** Put `cloudflared` and `hermes-gateway` on the same Docker network and use the container name:
+
+```yaml
+# docker-compose.yml
+services:
+  hermes-gateway:
+    # no ports needed — cloudflared reaches it internally
+    networks:
+      - hermes-net
+
+  cloudflared:
+    image: cloudflare/cloudflared:latest
+    command: tunnel run hermes-home
+    volumes:
+      - ./cloudflared:/etc/cloudflared
+    networks:
+      - hermes-net
+    depends_on:
+      - hermes-gateway
+
+networks:
+  hermes-net:
+    driver: bridge
+```
+
+Then in `config.yml`, use `http://hermes-gateway:8642` and `http://hermes-gateway:9119`.
+
+**Host machine:** If Hermes runs on the host (not in Docker), add `extra_hosts` and use `host.docker.internal`:
+
+```yaml
+services:
+  cloudflared:
+    image: cloudflare/cloudflared:latest
+    command: tunnel run hermes-home
+    volumes:
+      - ./cloudflared:/etc/cloudflared
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+```
+
+Then in `config.yml`, use `http://host.docker.internal:8642` and `http://host.docker.internal:9119`. The Hermes Gateway and dashboard must bind to `0.0.0.0` (not `127.0.0.1`) for the container to reach them.
+
+### 6. Verify the tunnel
+
+```bash
+# Gateway (should return sessions JSON)
+curl https://hermes-api.your-domain.com/api/sessions -H "Authorization: Bearer <API_SERVER_KEY>"
+
+# Dashboard (should return model info JSON)
+curl https://hermes-api.your-domain.com/api/model/info
+```
+
+### 7. Point the app at it
+
+In the app's **Add Connection** dialog:
+
+| Field | Value |
+|-------|-------|
+| **Label** | any name, e.g. `Home Hermes` |
+| **Host** | `https://hermes-api.your-domain.com` |
+| **Port** | leave blank (defaults to 443 for HTTPS) |
+| **API Key** | `API_SERVER_KEY` from the Hermes machine |
+
+For dashboard drawer features (Memory, Cron, Skills, Settings), configure auth via **⋮ → Dashboard / Proxy Settings**:
+
+- If the dashboard is **password-protected**: enter **Username** and **Password**, leave **Dashboard behind proxy** off. The app logs in via `/auth/password-login` and reuses the session cookie.
+- If the dashboard runs with **`--insecure`** (no auth): enable **Dashboard behind proxy** so the app sends clean requests without trying to scrape a session token.
+- **Dashboard Port**: leave blank — for HTTPS connections the app uses the same port as the gateway (443).
+
+### Cloudflare Tunnel security notes
+
+- Keep the Gateway API key required even behind Cloudflare — do not rely on URL obscurity.
+- Optional hardening: Cloudflare Access, mTLS, IP allowlist.
+- See [`docs/CLOUD_FLARE_TUNNEL.md`](docs/CLOUD_FLARE_TUNNEL.md) for a concise setup reference.
+
 ## Connect over HTTPS
 
 For hosted/reverse-proxy deployments (e.g., Hugging Face Spaces, VPS with nginx/Caddy), enter the full HTTPS URL in the **Host** field:
@@ -244,10 +382,11 @@ dashboard routes such as
 
 ### Security notes
 
-- Prefer Tailscale/VPN for remote use.
+- Prefer Tailscale/VPN or Cloudflare Tunnel for remote use.
 - Do not port-forward the Gateway API Server or dashboard directly to the public internet.
 - Rotate `API_SERVER_KEY` if it is shared or exposed.
 - Local/Tailscale examples use HTTP, so the private network boundary matters. Use HTTPS for public or hosted endpoints.
+- Cloudflare Tunnel provides HTTPS automatically — no need to manage TLS certificates.
 
 ## Architecture
 
@@ -262,6 +401,12 @@ Android app (Flutter)
    ├─ /api/cron/jobs
    ├─ /api/skills
    └─ /api/model/*
+
+Connection modes:
+├─ LAN/Wi-Fi     → http://<host-ip>:8642 (gateway) + :9119 (dashboard)
+├─ Tailscale     → http://<tailscale-ip>:8642 + :9119
+├─ Cloudflare    → https://hermes-api.your-domain.com (path-based routing)
+└─ HTTPS proxy   → https://your-host:443 (with path prefixes)
 ```
 
 ## Using the app
@@ -345,8 +490,46 @@ The Cron Jobs screen supports full CRUD:
 
 ## Development
 
+### Run in an Android emulator
+
+1. Install **Android Studio** (or the Android SDK + command-line tools) and create an **x86_64** emulator AVD:
+
+   ```bash
+   flutter emulators          # list available AVDs
+   flutter emulators --launch <emulator_id>
+   ```
+
+2. Run the app:
+
+   ```bash
+   cd hermes-android
+   flutter pub get
+   flutter run -d android
+   ```
+
+   If multiple devices are connected, target the emulator explicitly:
+
+   ```bash
+   flutter devices            # find the emulator's device id
+   flutter run -d <device_id>
+   ```
+
+3. **Network access from the emulator:**
+   - The emulator has its own virtual network. `10.0.2.2` routes to the host machine's `localhost`.
+   - For a **LAN Hermes host** (e.g. `192.168.0.100`): use that IP directly — the emulator has outbound LAN access.
+   - For a **Cloudflare Tunnel** deployment: use the public URL (e.g. `https://hermes-api.your-domain.com`) — the emulator has full internet access.
+
+   | Hermes location | Host field in the app |
+   |-----------------|----------------------|
+   | Host PC localhost (port 8642) | `10.0.2.2` |
+   | Another LAN machine | that machine's LAN IP |
+   | Cloudflare Tunnel | `https://hermes-api.your-domain.com` |
+
+4. **Hot reload** while editing: press **r** (hot reload), **R** (hot restart), **q** (quit).
+
+### Run tests and analysis
+
 ```bash
-cd hermes-android
 flutter pub get
 flutter analyze
 flutter test
@@ -414,6 +597,8 @@ Check that the Android connection's API key matches `API_SERVER_KEY` from the He
 - If the dashboard sits behind a reverse-proxy path, set **Dashboard path prefix**. If the proxy injects dashboard auth, enable **Dashboard behind proxy** so the app sends clean requests.
 - Check the dashboard port matches the connection (default `9119` for local/Tailscale, same HTTPS port for hosted; override it in Dashboard / Proxy Settings if needed).
 - The dashboard must be on the same host as the Gateway API Server for the app's drawer to reach it.
+- **Over Cloudflare Tunnel**: ensure the tunnel ingress routes dashboard paths (`/api/memory`, `/api/cron/jobs`, `/api/skills`, `/api/model/*`, `/auth/*`) to port `9119` and gateway paths (`/api/sessions`, `/v1/*`) to port `8642`. See [Connect over Cloudflare Tunnel](#connect-over-cloudflare-tunnel).
+- **Over Cloudflare Tunnel with `--insecure` dashboard**: enable **Dashboard behind proxy** in Dashboard / Proxy Settings so the app skips token scraping (which fails through the tunnel) and sends clean requests directly.
 
 ### Voice dictation or spoken replies aren't working
 
@@ -445,21 +630,28 @@ For hosted paths such as `https://your-hermes-host.example.com/profile/peter`, e
 lib/
 ├── main.dart                          # App shell, saved connections, navigation drawer
 ├── core/
+│   ├── auth/                          # Authentication utilities
+│   ├── config/                        # Configuration constants
 │   ├── models/
 │   │   ├── connection.dart            # SavedConnection model and host normalization
 │   │   └── session.dart               # Session model
-│   ├── screens/
-│   │   ├── session_list_screen.dart   # Session browser
-│   │   ├── chat_screen.dart           # Chat with SSE streaming
-│   │   ├── settings_screen.dart       # Model/theme/app settings
-│   │   ├── memory_screen.dart         # Memory viewer
-│   │   ├── skills_screen.dart         # Skills browser
-│   │   └── cron_screen.dart           # Cron job manager
-│   ├── services/
-│   │   ├── connection_manager.dart    # Saved connections, Gateway API, Dashboard API
-│   │   └── ws_client.dart             # JSON-RPC WebSocket client for future dashboard/TUI use
-│   └── utils/
-│       └── responsive.dart            # Phone/tablet breakpoints
+│   ├── network/
+│   │   └── connection_manager.dart    # Saved connections, Gateway API, Dashboard API
+│   └── ...
+├── features/
+│   ├── chat/                          # Chat screen with SSE streaming
+│   ├── sessions/                      # Session browser
+│   ├── cron/                          # Cron job manager
+│   ├── memory/                        # Memory viewer
+│   ├── skills/                        # Skills browser
+│   ├── services/                      # Service log viewer
+│   ├── settings/                      # Model/theme/app settings
+│   └── diagnostics/                   # Diagnostics screen
+├── shared/
+│   ├── errors/                        # Error handling widgets
+│   ├── theme/                         # Theme definitions
+│   ├── widgets/                       # Shared UI components
+│   └── responsive.dart                # Phone/tablet breakpoints
 └── assets/
     └── icon/
         └── icon.png                   # App icon source

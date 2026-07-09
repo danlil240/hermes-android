@@ -227,6 +227,34 @@ class ApiClient {
         .toList();
   }
 
+  // ── Session management ───────────────────────────────────────────────
+
+  Future<void> deleteSession(String sessionId) async {
+    final res = await _http.delete(
+      Uri.parse('$baseUrl/api/sessions/$sessionId'),
+      headers: _headers,
+    );
+    if (res.statusCode < 200 || res.statusCode >= 300) {
+      throw Exception('HTTP ${res.statusCode}: ${res.body}');
+    }
+  }
+
+  Future<void> updateSession(
+    String sessionId, {
+    String? title,
+  }) async {
+    final body = <String, dynamic>{};
+    if (title != null) body['title'] = title;
+    final res = await _http.patch(
+      Uri.parse('$baseUrl/api/sessions/$sessionId'),
+      headers: _headers,
+      body: jsonEncode(body),
+    );
+    if (res.statusCode < 200 || res.statusCode >= 300) {
+      throw Exception('HTTP ${res.statusCode}: ${res.body}');
+    }
+  }
+
   // ── Messages ─────────────────────────────────────────────────────────
 
   Future<List<Map<String, dynamic>>> getMessages(String sessionId) async {
@@ -327,6 +355,21 @@ class ApiClient {
     }
   }
 
+  Future<Map<String, dynamic>> apiPatch(
+    String endpoint, {
+    Map<String, dynamic>? body,
+  }) async {
+    final res = await _http.patch(
+      Uri.parse('$baseUrl/$endpoint'),
+      headers: _headers,
+      body: body != null ? jsonEncode(body) : null,
+    );
+    if (res.statusCode < 200 || res.statusCode >= 300) {
+      throw Exception('HTTP ${res.statusCode}');
+    }
+    return jsonDecode(res.body) as Map<String, dynamic>;
+  }
+
   // ── Diagnostics ──────────────────────────────────────────────────────
 
   /// Fetches `/status` from the Gateway API for diagnostics.
@@ -398,6 +441,34 @@ class ApiClient {
       throw Exception('HTTP ${res.statusCode}: ${res.body}');
     }
     return jsonDecode(res.body) as Map<String, dynamic>;
+  }
+
+  /// Fetches past service runs for the audit log.
+  /// Calls `GET /api/service-runs` with optional pagination.
+  Future<List<ServiceRun>> getServiceRuns({
+    int limit = 50,
+    int offset = 0,
+  }) async {
+    final res = await _http.get(
+      Uri.parse(
+        '$baseUrl/api/service-runs?limit=$limit&offset=$offset',
+      ),
+      headers: _headers,
+    );
+    if (res.statusCode != 200) throw Exception('HTTP ${res.statusCode}');
+    final data = jsonDecode(res.body);
+    List<dynamic> list;
+    if (data is List) {
+      list = data;
+    } else if (data is Map<String, dynamic>) {
+      list = data['data'] as List? ?? [];
+    } else {
+      list = [];
+    }
+    return list
+        .whereType<Map<String, dynamic>>()
+        .map((r) => ServiceRun.fromJson(r))
+        .toList();
   }
 
   // ── Service run SSE log streaming ────────────────────────────────────

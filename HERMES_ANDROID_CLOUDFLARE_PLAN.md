@@ -1265,7 +1265,7 @@ Hermes on home PC, controlled directly by your Android app through Cloudflare Tu
 
 ## 27. Implementation Status & Remaining Work
 
-> **Last updated:** 2026-05-29 — based on codebase audit of `lib/`, `test/`, `docs/`, and CI configuration.
+> **Last updated:** 2026-05-30 — based on codebase audit of `lib/`, `test/`, `docs/`, and CI configuration.
 
 ### 27.1 Completed Features
 
@@ -1309,27 +1309,27 @@ The following items from the plan are **not yet implemented** or need additional
 
 #### High Priority — MVP Gaps
 
-| Area | What's Missing | Notes |
-|------|----------------|-------|
-| **Session management** | No delete, rename, or archive sessions from the app | `DELETE /api/sessions/{id}` and `PATCH /api/sessions/{id}` not called |
-| **Service audit log** | No persistent history of past service runs | Plan MVP lists "audit log for services"; only active runs are tracked |
-| **Session search/filter** | No search or filter on session list | All sessions shown in a flat list |
-| **Connection auto-retry** | No automatic reconnection or retry on network drops | Health check is manual (retry button); no exponential backoff |
-| **Error handling polish** | Errors shown as raw strings | Should be user-friendly messages with actionable guidance |
+| Area | Status | Notes |
+|------|--------|-------|
+| **Session management** | ✅ Done | Swipe-to-delete with confirmation, rename dialog, `DELETE /api/sessions/{id}` and `PATCH /api/sessions/{id}` wired in `ApiClient` and `SessionListScreen` |
+| **Service audit log** | ✅ Done | "History" tab on Services screen with `GET /api/service-runs` pagination, status icons, relative timestamps, result summaries |
+| **Session search/filter** | ✅ Done | Search bar on session list filtering by title, model, preview, and session ID |
+| **Connection auto-retry** | ✅ Done | Health check retries with exponential backoff (3 attempts); session fetch auto-retries up to 3 times on failure |
+| **Error handling polish** | ✅ Done | `ErrorMessages.format()` maps HTTP codes and network exceptions to user-friendly messages; integrated in session list and services screens |
 
 #### Medium Priority — UX & Polish
 
 | Area | What's Missing | Notes |
 |------|----------------|-------|
-| **Theme toggle UI** | No dark/light/system toggle in Settings | `ThemeMode` is read from prefs but no UI control exists in Settings screen |
-| **Voice configuration UI** | No voice name/locale picker | `voice_name` and `voice_locale` are read from prefs but no Settings UI to set them |
-| **Verbose mode toggle UI** | No toggle in Settings | `_verboseMode` is read from prefs but only toggled from chat screen overflow |
-| **Chat: markdown code highlighting** | `highlight` package declared but not wired | `flutter_markdown` does not use syntax highlighter |
-| **Tablet layout for chat** | Chat screen is phone-only layout | No split-view or wider message layout on tablets |
-| **Session export/share** | No way to export or share a chat transcript | |
+| **Theme toggle UI** | ✅ Done | Dark/light/system toggle in Settings screen |
+| **Voice configuration UI** | ✅ Done | Voice name and locale picker in Settings screen |
+| **Verbose mode toggle UI** | ✅ Done | Verbose mode toggle in Settings screen |
+| **Chat: markdown code highlighting** | ✅ Done | `CodeHighlighter` in `lib/shared/widgets/code_highlighter.dart` wired to `flutter_markdown` `MarkdownBody.syntaxHighlighter` with dark/light themes |
+| **Tablet layout for chat** | ✅ Done | Chat screen constrained to 800px max width on tablets via `ConstrainedBox`; session list uses `GridView` on tablets |
+| **Session export/share** | ✅ Done | Share button in chat AppBar exports transcript as Markdown via `share_plus` |
 | **File/media in chat** | No attachment support | Only text messages are sent |
-| **Scroll-to-bottom FAB** | Partially implemented | `_showScrollToBottom` state exists but FAB may not render in all cases |
-| **Empty state for questions** | No empty state when no active questions | |
+| **Scroll-to-bottom FAB** | ✅ Done | FAB shows whenever user is scrolled up >200px from bottom, regardless of streaming state |
+| **Empty state for questions** | ✅ Done | Empty state with icon and "No messages yet" text shown when no messages or pending questions |
 
 #### Low Priority — Hardening & Infrastructure
 
@@ -1339,10 +1339,10 @@ The following items from the plan are **not yet implemented** or need additional
 | **Offline caching** | No local caching of sessions or messages | Every screen requires a live connection |
 | **Crash reporting** | No Crashlytics, Sentry, or similar | |
 | **End-to-end integration tests** | No integration tests with a mock server | Only unit tests for models and connection manager |
-| **Widget tests** | `test/widget_test.dart` is a placeholder (`expect(true, isTrue)`) | No widget tests for any screen |
+| **Widget tests** | ✅ Done | `test/widget_test.dart` and `test/question_widgets_test.dart` cover QuestionCard dispatch, interaction, and all question types (22 widget tests); `test/code_highlighter_test.dart` covers syntax highlighting (6 tests) |
 | **Cloudflare Tunnel setup automation** | No in-app guide or validation for tunnel setup | `docs/CLOUD_FLARE_TUNNEL.md` covers manual setup only |
 | **Release signing docs** | Keystore setup documented in CI but not in README | |
-| **App version display** | `package_info_plus` declared but not shown in Settings | |
+| **App version display** | ✅ Done | Shown in Settings screen via `package_info_plus` |
 | **Deep linking** | No deep link support for `hermes://` URLs | |
 
 #### Optional — Phase 6 (Telegram Bridge)
@@ -1369,15 +1369,19 @@ Per the MVP definition in Section 24, the current status is:
 | View logs service | ✅ Done (SSE log viewer) |
 | Single-choice LLM question | ✅ Done |
 | Confirmation LLM question | ✅ Done |
-| Audit log for services | ❌ Missing |
+| Audit log for services | ✅ Done |
 
-**MVP is ~90% complete.** The only missing MVP item is the **service audit log** — a persistent history of past service runs viewable in the app.
+**MVP is 100% complete.** All MVP items are implemented.
 
 ### 27.4 Recommended Next Steps
 
-1. **Service audit log** — Add a "History" tab to the Services screen showing past service runs (`GET /api/service-runs` with pagination). This completes the MVP.
-2. **Session management** — Add swipe-to-delete and rename on the session list. Wire `DELETE /api/sessions/{id}` and `PATCH /api/sessions/{id}`.
-3. **Theme + voice settings UI** — Add toggles in the Settings screen for dark/light/system theme and voice name/locale selection.
-4. **Widget tests** — Add tests for key screens (session list, chat, services, question widgets).
-5. **Error handling polish** — Map HTTP error codes to user-friendly messages.
-6. **Connection auto-retry** — Add exponential backoff reconnection when the health check fails.
+1. ~~**Service audit log**~~ — ✅ Done. History tab with pagination added to Services screen.
+2. ~~**Session management**~~ — ✅ Done. Swipe-to-delete and rename wired in SessionListScreen.
+3. ~~**Theme + voice settings UI**~~ — ✅ Done. Toggles in Settings screen.
+4. ~~**Widget tests**~~ — ✅ Done. Tests for QuestionCard (all types), CodeHighlighter, and interaction callbacks.
+5. ~~**Error handling polish**~~ — ✅ Done. `ErrorMessages` utility maps HTTP codes to user-friendly messages.
+6. ~~**Connection auto-retry**~~ — ✅ Done. Exponential backoff on health check and session fetch.
+7. ~~**Markdown code highlighting**~~ — ✅ Done. `CodeHighlighter` wired with `flutter_markdown` using `highlight` package.
+8. ~~**Tablet layout for chat**~~ — ✅ Done. Chat constrained to 800px on tablets; session list uses responsive grid.
+9. **Offline caching** — Cache sessions and messages locally for offline viewing.
+10. **Push notifications** — FCM integration for service completion and question alerts.

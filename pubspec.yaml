@@ -40,6 +40,7 @@ dependencies:
   # Misc
   url_launcher: ^6.3.0
   package_info_plus: ^8.0.0
+  share_plus: ^10.1.2
 
   # Markdown syntax highlighting
   highlight: ^0.7.0

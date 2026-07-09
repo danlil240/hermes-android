@@ -4,6 +4,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_markdown/flutter_markdown.dart';
 import 'package:flutter_tts/flutter_tts.dart';
+import 'package:share_plus/share_plus.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:speech_to_text/speech_recognition_error.dart';
 import 'package:speech_to_text/speech_recognition_result.dart';
@@ -13,6 +14,7 @@ import '../../core/models/question.dart';
 import '../../core/network/connection_manager.dart';
 import '../questions/question_widgets.dart';
 import '../../shared/responsive.dart';
+import '../../shared/widgets/code_highlighter.dart';
 
 class ChatScreen extends StatefulWidget {
   final SavedConnection connection;
@@ -225,7 +227,7 @@ class _ChatScreenState extends State<ChatScreen> {
         _scrollController.hasClients &&
         _scrollController.position.pixels >=
             _scrollController.position.maxScrollExtent - 200;
-    if (atBottom != !_showScrollToBottom && _streaming) {
+    if (atBottom != !_showScrollToBottom) {
       setState(() => _showScrollToBottom = !atBottom);
     }
   }
@@ -614,6 +616,35 @@ class _ChatScreenState extends State<ChatScreen> {
     WidgetsBinding.instance.addPostFrameCallback((_) => _scrollToBottom());
   }
 
+  String _exportTranscript() {
+    final lines = <String>[];
+    lines.add('# ${widget.session.title}');
+    lines.add('');
+    lines.add('Session ID: ${widget.session.id}');
+    lines.add('Model: ${widget.session.model}');
+    lines.add('');
+    for (final msg in _messages) {
+      final role = (msg['role'] as String?) ?? 'unknown';
+      final content = (msg['content'] as String?) ?? '';
+      if (content.isEmpty) continue;
+      if (role == 'user') {
+        lines.add('**User:** $content');
+      } else if (role == 'assistant') {
+        lines.add('**Hermes:** $content');
+      } else if (role == 'tool') {
+        final name = (msg['name'] as String?) ?? 'tool';
+        lines.add('**Tool ($name):** $content');
+      }
+      lines.add('');
+    }
+    return lines.join('\n');
+  }
+
+  void _shareTranscript() {
+    final transcript = _exportTranscript();
+    Share.share(transcript, subject: 'Hermes Chat: ${widget.session.title}');
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -639,12 +670,18 @@ class _ChatScreenState extends State<ChatScreen> {
                 ],
               ),
             )
-          else
+          else ...[
+            IconButton(
+              icon: const Icon(Icons.share),
+              onPressed: _loading ? null : _shareTranscript,
+              tooltip: 'Export chat',
+            ),
             IconButton(
               icon: const Icon(Icons.refresh),
               onPressed: _loading ? null : _fetchMessages,
               tooltip: 'Refresh',
             ),
+          ],
         ],
       ),
       body: Center(
@@ -660,6 +697,13 @@ class _ChatScreenState extends State<ChatScreen> {
           ),
         ),
       ),
+      floatingActionButton: _showScrollToBottom
+          ? FloatingActionButton.small(
+              onPressed: _scrollToBottom,
+              tooltip: 'Scroll to bottom',
+              child: const Icon(Icons.keyboard_arrow_down),
+            )
+          : null,
     );
   }
 
@@ -816,9 +860,33 @@ class _ChatScreenState extends State<ChatScreen> {
       displayMessages.add(q);
     }
 
+    // Empty state: no messages and no pending questions
+    if (displayMessages.isEmpty) {
+      return Center(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(Icons.chat_outlined, size: 48, color: Colors.grey[400]),
+            const SizedBox(height: 16),
+            Text(
+              'No messages yet',
+              style: Theme.of(context).textTheme.titleMedium,
+            ),
+            const SizedBox(height: 8),
+            Text(
+              'Send a message below to start chatting',
+              style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                    color: Colors.grey[500],
+                  ),
+            ),
+          ],
+        ),
+      );
+    }
+
     return ListView.builder(
       controller: _scrollController,
-      padding: const EdgeInsets.only(bottom: 4),
+      padding: const EdgeInsets.only(bottom: 80),
       itemCount: displayMessages.length,
       itemBuilder: (context, index) {
         final item = displayMessages[index];
@@ -941,6 +1009,9 @@ class _MessageBubble extends StatelessWidget {
           // Message content
           MarkdownBody(
             data: content,
+            syntaxHighlighter: isUser
+                ? null
+                : CodeHighlighter(isDark: isDark),
             styleSheet: MarkdownStyleSheet(
               p: (isUser
                   ? theme.textTheme.bodyMedium?.copyWith(color: Colors.white)
@@ -953,6 +1024,18 @@ class _MessageBubble extends StatelessWidget {
                 fontFamily: 'monospace',
                 color: isUser ? Colors.white : null,
               ),
+              codeblockDecoration: BoxDecoration(
+                color: isUser
+                    ? Colors.white.withValues(alpha: 0.12)
+                    : (isDark ? const Color(0xFF282C34) : const Color(0xFFFAFAFA)),
+                borderRadius: BorderRadius.circular(8),
+                border: Border.all(
+                  color: isUser
+                      ? Colors.white24
+                      : (isDark ? Colors.white12 : Colors.black.withValues(alpha: 0.08)),
+                ),
+              ),
+              codeblockPadding: const EdgeInsets.all(12),
               a: TextStyle(
                 color: isUser ? Colors.white70 : theme.colorScheme.primary,
               ),
