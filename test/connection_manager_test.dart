@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 
 import 'package:flutter_test/flutter_test.dart';
@@ -14,6 +15,27 @@ String? _header(http.BaseRequest request, String name) {
     if (entry.key.toLowerCase() == lower) return entry.value;
   }
   return null;
+}
+
+class _ControlledStreamClient extends http.BaseClient {
+  final StreamController<List<int>> controller =
+      StreamController<List<int>>.broadcast();
+  int sendCount = 0;
+  bool closed = false;
+
+  @override
+  Future<http.StreamedResponse> send(http.BaseRequest request) async {
+    sendCount++;
+    return http.StreamedResponse(controller.stream, 200, request: request);
+  }
+
+  @override
+  void close() {
+    closed = true;
+    if (!controller.isClosed) {
+      controller.close();
+    }
+  }
 }
 
 void main() {
@@ -390,6 +412,46 @@ void main() {
       expect(question!['title'], 'What should I update?');
       expect(question!['mode'], 'single');
     });
+    test('streaming chat survives closing the shared API client', () async {
+      final streamClient = _ControlledStreamClient();
+      final apiClient = ApiClient(
+        baseUrl: 'http://hermes.local:8642',
+        apiKey: 'valid-key',
+        httpClient: MockClient((request) async {
+          fail('shared ApiClient HTTP client should not be used for streaming');
+        }),
+      );
+      final gateway = GatewayChatClient(
+        apiClient,
+        streamClientFactory: () => streamClient,
+      );
+
+      var doneCalled = false;
+      final tokens = <String>[];
+      final future = gateway.sendMessageStreaming(
+        message: 'hello',
+        sessionId: 'sess-123',
+        history: const [],
+        onToken: tokens.add,
+        onDone: () => doneCalled = true,
+        onError: fail,
+      );
+
+      apiClient.close();
+
+      streamClient.controller.add(
+        utf8.encode(
+          'data: {"choices":[{"delta":{"content":"hello"}}]}\n\n',
+        ),
+      );
+      await streamClient.controller.close();
+      await future;
+
+      expect(streamClient.sendCount, 1);
+      expect(tokens, ['hello']);
+      expect(doneCalled, isTrue);
+    });
+
   });
 
   group('DashboardClient', () {

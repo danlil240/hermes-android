@@ -753,8 +753,14 @@ typedef QuestionCallback = void Function(Map<String, dynamic> question);
 class GatewayChatClient {
   final ApiClient _api;
   final String _baseUrl;
+  final http.Client Function() _streamClientFactory;
+  http.Client? _activeStreamClient;
 
-  GatewayChatClient(this._api) : _baseUrl = _api.baseUrl;
+  GatewayChatClient(
+    this._api, {
+    http.Client Function()? streamClientFactory,
+  })  : _baseUrl = _api.baseUrl,
+        _streamClientFactory = streamClientFactory ?? http.Client.new;
 
   /// Generate a client-side session ID: `mob-<timestamp>-<uuid>`.
   static String generateSessionId() {
@@ -869,6 +875,9 @@ class GatewayChatClient {
 
     final headers = {..._api._headers, 'X-Hermes-Session-Id': sessionId};
 
+    final streamClient = _streamClientFactory();
+    _activeStreamClient = streamClient;
+
     try {
       final request = http.Request(
         'POST',
@@ -877,7 +886,7 @@ class GatewayChatClient {
       request.headers.addAll(headers);
       request.body = jsonEncode(body);
 
-      final response = await _api._http.send(request);
+      final response = await streamClient.send(request);
 
       if (response.statusCode != 200) {
         final errorBody = await response.stream.bytesToString();
@@ -915,10 +924,17 @@ class GatewayChatClient {
       onDone();
     } catch (e) {
       onError(e.toString());
+    } finally {
+      if (identical(_activeStreamClient, streamClient)) {
+        _activeStreamClient = null;
+      }
+      streamClient.close();
     }
   }
 
   void abort() {
+    _activeStreamClient?.close();
+    _activeStreamClient = null;
     _api.close();
   }
 }
