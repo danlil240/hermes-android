@@ -15,6 +15,8 @@ class MemoryScreen extends StatefulWidget {
   final SavedConnection connection;
   const MemoryScreen({required this.connection, super.key});
 
+  static final Map<String, List<Map<String, dynamic>>> cachedEntries = {};
+
   @override
   State<MemoryScreen> createState() => _MemoryScreenState();
 }
@@ -23,6 +25,7 @@ class _MemoryScreenState extends State<MemoryScreen> {
   late DashboardClient _client;
   List<Map<String, dynamic>> _entries = [];
   bool _loading = true;
+  bool _refreshing = false;
   dynamic _error;
   String? _source; // 'config' or 'api'
 
@@ -49,23 +52,45 @@ class _MemoryScreenState extends State<MemoryScreen> {
     super.dispose();
   }
 
-  Future<void> _loadMemory() async {
-    setState(() {
-      _loading = true;
-      _error = null;
-    });
+  Future<void> _loadMemory({bool silentRefresh = false}) async {
+    final cacheKey = widget.connection.id;
+    final hasCache = MemoryScreen.cachedEntries.containsKey(cacheKey);
+
+    if (silentRefresh && hasCache) {
+      setState(() => _refreshing = true);
+    } else {
+      setState(() {
+        _loading = true;
+        _error = null;
+      });
+    }
+
+    if (hasCache) {
+      _entries = MemoryScreen.cachedEntries[cacheKey]!;
+      if (!silentRefresh) {
+        setState(() => _loading = false);
+      }
+    }
 
     try {
+      List<Map<String, dynamic>> entries;
+      String source = 'config';
+
       // Try dedicated /api/memory endpoint first
       try {
         final memData = await _client.apiGet('memory');
         final items =
             memData['entries'] as List? ?? memData['memory'] as List? ?? [];
         if (items.isNotEmpty) {
+          entries = items.cast<Map<String, dynamic>>();
+          source = 'api';
+          MemoryScreen.cachedEntries[cacheKey] = entries;
+          if (!mounted) return;
           setState(() {
-            _entries = items.cast<Map<String, dynamic>>();
-            _source = 'api';
+            _entries = entries;
+            _source = source;
             _loading = false;
+            _refreshing = false;
           });
           return;
         }
@@ -78,34 +103,30 @@ class _MemoryScreenState extends State<MemoryScreen> {
       final mem = config['memory'];
 
       if (mem is List) {
-        // Memory is a list of {target, content}
-        setState(() {
-          _entries = mem.cast<Map<String, dynamic>>();
-          _source = 'config';
-          _loading = false;
-        });
+        entries = mem.cast<Map<String, dynamic>>();
       } else if (mem is Map) {
-        // Memory is a map {key: value}
-        final items = <Map<String, dynamic>>[];
+        entries = <Map<String, dynamic>>[];
         mem.forEach((key, value) {
-          items.add({'target': key, 'content': value.toString()});
-        });
-        setState(() {
-          _entries = items;
-          _source = 'config';
-          _loading = false;
+          entries.add({'target': key, 'content': value.toString()});
         });
       } else {
-        setState(() {
-          _entries = [];
-          _source = 'config';
-          _loading = false;
-        });
+        entries = [];
       }
+
+      MemoryScreen.cachedEntries[cacheKey] = entries;
+      if (!mounted) return;
+      setState(() {
+        _entries = entries;
+        _source = source;
+        _loading = false;
+        _refreshing = false;
+      });
     } catch (e) {
+      if (!mounted) return;
       setState(() {
         _error = e;
         _loading = false;
+        _refreshing = false;
       });
     }
   }
@@ -128,11 +149,18 @@ class _MemoryScreenState extends State<MemoryScreen> {
         actions: [
           IconButton(
             icon: const Icon(Icons.refresh),
-            onPressed: _loading ? null : _loadMemory,
+            onPressed: (_loading || _refreshing)
+                ? null
+                : () => _loadMemory(silentRefresh: true),
           ),
         ],
       ),
-      body: _buildBody(),
+      body: Column(
+        children: [
+          if (_refreshing) const LinearProgressIndicator(minHeight: 2),
+          Expanded(child: _buildBody()),
+        ],
+      ),
     );
   }
 

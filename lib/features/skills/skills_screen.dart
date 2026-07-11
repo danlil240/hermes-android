@@ -8,6 +8,8 @@ class SkillsScreen extends StatefulWidget {
   final SavedConnection connection;
   const SkillsScreen({required this.connection, super.key});
 
+  static final Map<String, List<Map<String, dynamic>>> cachedSkills = {};
+
   @override
   State<SkillsScreen> createState() => _SkillsScreenState();
 }
@@ -16,6 +18,7 @@ class _SkillsScreenState extends State<SkillsScreen> {
   late DashboardClient _client;
   List<Map<String, dynamic>> _skills = [];
   bool _loading = true;
+  bool _refreshing = false;
   dynamic _error;
 
   @override
@@ -41,23 +44,42 @@ class _SkillsScreenState extends State<SkillsScreen> {
     super.dispose();
   }
 
-  Future<void> _load() async {
-    setState(() {
-      _loading = true;
-      _error = null;
-    });
+  Future<void> _load({bool silentRefresh = false}) async {
+    final cacheKey = widget.connection.id;
+    final hasCache = SkillsScreen.cachedSkills.containsKey(cacheKey);
+
+    if (silentRefresh && hasCache) {
+      setState(() => _refreshing = true);
+    } else {
+      setState(() {
+        _loading = true;
+        _error = null;
+      });
+    }
+
+    if (hasCache) {
+      _skills = SkillsScreen.cachedSkills[cacheKey]!;
+      if (!silentRefresh) {
+        setState(() => _loading = false);
+      }
+    }
+
     try {
       final raw = await _client.getSkills();
+      final skills = raw.whereType<Map<String, dynamic>>().toList();
+      SkillsScreen.cachedSkills[cacheKey] = skills;
       if (!mounted) return;
       setState(() {
-        _skills = raw.whereType<Map<String, dynamic>>().toList();
+        _skills = skills;
         _loading = false;
+        _refreshing = false;
       });
     } catch (e) {
       if (!mounted) return;
       setState(() {
         _error = e;
         _loading = false;
+        _refreshing = false;
       });
     }
   }
@@ -70,11 +92,18 @@ class _SkillsScreenState extends State<SkillsScreen> {
         actions: [
           IconButton(
             icon: const Icon(Icons.refresh),
-            onPressed: _loading ? null : _load,
+            onPressed: (_loading || _refreshing)
+                ? null
+                : () => _load(silentRefresh: true),
           ),
         ],
       ),
-      body: _buildBody(),
+      body: Column(
+        children: [
+          if (_refreshing) const LinearProgressIndicator(minHeight: 2),
+          Expanded(child: _buildBody()),
+        ],
+      ),
     );
   }
 

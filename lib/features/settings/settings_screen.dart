@@ -12,6 +12,53 @@ class SettingsScreen extends StatefulWidget {
   final SavedConnection connection;
   const SettingsScreen({required this.connection, super.key});
 
+  // ── Static in-memory cache (stale-while-revalidate) ──────────────────
+  // Model info/options rarely change. Cache them per connection so the
+  // settings screen opens instantly on repeat visits instead of waiting
+  // for a full dashboard login + 2 API calls through Cloudflare.
+  static final Map<String, Map<String, dynamic>> _cachedModelInfo = {};
+  static final Map<String, Map<String, dynamic>> _cachedModelOptions = {};
+
+  /// Pre-fetch model info and options into the static cache so the settings
+  /// screen opens instantly. Safe to call at app startup; failures are
+  /// silently ignored (the screen will retry on open).
+  /// If [client] is provided, uses it instead of creating a new one (enables
+  /// sharing a single dashboard login across all preloads).
+  static Future<void> preloadModelData(
+    SavedConnection conn, {
+    DashboardClient? client,
+  }) async {
+    final cacheKey = conn.id;
+    if (_cachedModelInfo.containsKey(cacheKey) &&
+        _cachedModelOptions.containsKey(cacheKey)) {
+      return;
+    }
+    final ownsClient = client == null;
+    client ??= DashboardClient(
+      host: conn.dashboardHost,
+      port: conn.dashboardPort,
+      pathPrefix: conn.dashboardPrefix ?? "",
+      proxied: conn.dashboardProxied,
+      useHttps: conn.useHttps,
+      username: conn.dashboardUsername,
+      password: conn.dashboardPassword,
+      cfAccessClientId: conn.cfAccessClientId,
+      cfAccessClientSecret: conn.cfAccessClientSecret,
+    );
+    try {
+      final results = await Future.wait([
+        client.getModelInfo(),
+        client.getModelOptions(),
+      ]);
+      _cachedModelInfo[cacheKey] = results[0];
+      _cachedModelOptions[cacheKey] = results[1];
+    } catch (_) {
+      // Silent — screen will retry when opened.
+    } finally {
+      if (ownsClient) client.close();
+    }
+  }
+
   @override
   State<SettingsScreen> createState() => _SettingsScreenState();
 }
@@ -21,6 +68,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
   Map<String, dynamic>? _modelInfo;
   Map<String, dynamic>? _modelOptions;
   bool _loading = true;
+  bool _refreshing = false;
   dynamic _error;
   String? _successMsg;
 
@@ -53,11 +101,31 @@ class _SettingsScreenState extends State<SettingsScreen> {
     super.dispose();
   }
 
-  Future<void> _loadData() async {
-    setState(() {
-      _loading = true;
-      _error = null;
-    });
+  String get _cacheKey => widget.connection.id;
+
+  Future<void> _loadData({bool silentRefresh = false}) async {
+    final hasCache =
+        SettingsScreen._cachedModelInfo.containsKey(_cacheKey) &&
+        SettingsScreen._cachedModelOptions.containsKey(_cacheKey);
+
+    if (silentRefresh && hasCache) {
+      setState(() => _refreshing = true);
+    } else {
+      setState(() {
+        _loading = true;
+        _error = null;
+      });
+    }
+
+    // If we have cached data, show it immediately while fetching fresh data.
+    if (hasCache) {
+      _modelInfo = SettingsScreen._cachedModelInfo[_cacheKey];
+      _modelOptions = SettingsScreen._cachedModelOptions[_cacheKey];
+      _parseModelOptions();
+      if (!silentRefresh) {
+        setState(() => _loading = false);
+      }
+    }
 
     try {
       final results = await Future.wait([
@@ -65,16 +133,21 @@ class _SettingsScreenState extends State<SettingsScreen> {
         _client.getModelOptions(),
       ]);
 
+      SettingsScreen._cachedModelInfo[_cacheKey] = results[0];
+      SettingsScreen._cachedModelOptions[_cacheKey] = results[1];
+
       setState(() {
         _modelInfo = results[0];
         _modelOptions = results[1];
         _loading = false;
+        _refreshing = false;
         _parseModelOptions();
       });
     } catch (e) {
       setState(() {
         _error = e;
         _loading = false;
+        _refreshing = false;
       });
     }
   }
@@ -146,7 +219,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
         actions: [
           IconButton(
             icon: const Icon(Icons.refresh),
-            onPressed: _loading ? null : _loadData,
+            onPressed: (_loading || _refreshing)
+                ? null
+                : () => _loadData(silentRefresh: true),
             tooltip: 'Refresh',
           ),
         ],
@@ -173,6 +248,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
     return ListView(
       padding: const EdgeInsets.all(16),
       children: [
+        if (_refreshing)
+          const LinearProgressIndicator(minHeight: 2),
         // ---- Section: Model ----
         _buildSectionHeader('Model Selection'),
         if (_modelInfo != null)

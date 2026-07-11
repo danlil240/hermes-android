@@ -72,11 +72,31 @@ class HermesAppState extends State<HermesApp> {
   bool _biometricEnabled = false;
   bool _authInProgress = false;
   String? _lockMessage;
+  SavedConnection? _initialConnection;
+  bool _initialConnectionLoaded = false;
+  SavedConnection? _pendingDashboardConfig;
+  static const String _lastConnectionKey = 'last_connection_id';
 
   @override
   void initState() {
     super.initState();
     _checkBiometric();
+    _loadInitialConnection();
+  }
+
+  Future<void> _loadInitialConnection() async {
+    final conns = await widget.connManager.getConnectionsWithSecrets();
+    if (!mounted) return;
+    final lastId = widget.prefs.getString(_lastConnectionKey);
+    final conn = lastId == null
+        ? (conns.isNotEmpty ? conns.first : null)
+        : (conns.where((c) => c.id == lastId).firstOrNull ??
+              (conns.isNotEmpty ? conns.first : null));
+    if (!mounted) return;
+    setState(() {
+      _initialConnection = conn;
+      _initialConnectionLoaded = true;
+    });
   }
 
   Future<void> _checkBiometric() async {
@@ -289,19 +309,72 @@ class HermesAppState extends State<HermesApp> {
           foregroundColor: Colors.black,
         ),
       ),
-      home: _unlocked
-          ? HomeScreen(
-              connManager: widget.connManager,
-              biometricLock: widget.biometricLock,
-              biometricAvailable: _biometricAvailable,
-              biometricEnabled: _biometricEnabled,
-              onToggleBiometric: _toggleBiometricLock,
-            )
-          : _LockScreen(
+      home: !_unlocked
+          ? _LockScreen(
               onRetry: _promptBiometric,
               authenticating: _authInProgress,
               message: _lockMessage,
-            ),
+            )
+          : !_initialConnectionLoaded
+              ? const _LoadingScreen()
+              : _initialConnection != null
+                  ? _buildMainNavigation(_initialConnection!)
+                  : HomeScreen(
+                      connManager: widget.connManager,
+                      biometricLock: widget.biometricLock,
+                      biometricAvailable: _biometricAvailable,
+                      biometricEnabled: _biometricEnabled,
+                      onToggleBiometric: _toggleBiometricLock,
+                      pendingDashboardConfig: _pendingDashboardConfig,
+                      onDashboardConfigShown: () {
+                        setState(() => _pendingDashboardConfig = null);
+                      },
+                    ),
+    );
+  }
+
+  Widget _buildMainNavigation(SavedConnection conn) {
+    widget.prefs.setString(_lastConnectionKey, conn.id);
+    return MainNavigationScreen(
+      connection: conn,
+      prefs: widget.prefs,
+      connManager: widget.connManager,
+      biometricAvailable: _biometricAvailable,
+      biometricEnabled: _biometricEnabled,
+      onToggleBiometric: _toggleBiometricLock,
+      onSwitchConnection: () {
+        setState(() {
+          _initialConnection = null;
+          _initialConnectionLoaded = false;
+          _pendingDashboardConfig = null;
+        });
+        _loadInitialConnection();
+      },
+      onConfigureDashboard: () {
+        setState(() {
+          _initialConnection = null;
+          _pendingDashboardConfig = conn;
+        });
+      },
+      onConnectionChanged: () {
+        setState(() {
+          _initialConnection = null;
+          _initialConnectionLoaded = false;
+        });
+        _loadInitialConnection();
+      },
+    );
+  }
+}
+
+/// Shown briefly while connections are being loaded from secure storage.
+class _LoadingScreen extends StatelessWidget {
+  const _LoadingScreen();
+
+  @override
+  Widget build(BuildContext context) {
+    return const Scaffold(
+      body: Center(child: CircularProgressIndicator()),
     );
   }
 }
@@ -434,12 +507,16 @@ class HomeScreen extends StatefulWidget {
   final bool biometricAvailable;
   final bool biometricEnabled;
   final Future<bool> Function(bool enabled) onToggleBiometric;
+  final SavedConnection? pendingDashboardConfig;
+  final VoidCallback? onDashboardConfigShown;
   const HomeScreen({
     required this.connManager,
     required this.biometricLock,
     required this.biometricAvailable,
     required this.biometricEnabled,
     required this.onToggleBiometric,
+    this.pendingDashboardConfig,
+    this.onDashboardConfigShown,
     super.key,
   });
 
@@ -449,7 +526,6 @@ class HomeScreen extends StatefulWidget {
 
 class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   List<SavedConnection> _connections = [];
-  bool _autoNavigated = false;
   Timer? _backgroundSync;
   static const String _lastConnectionKey = 'last_connection_id';
 
@@ -457,12 +533,6 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     final conns = await widget.connManager.getConnectionsWithSecrets();
     if (!mounted) return;
     setState(() => _connections = conns);
-    if (!_autoNavigated && conns.isNotEmpty) {
-      _autoNavigated = true;
-      WidgetsBinding.instance.addPostFrameCallback((_) {
-        if (mounted) _maybeAutoNavigate();
-      });
-    }
   }
 
   @override
@@ -474,6 +544,14 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       const Duration(seconds: 45),
       (_) => _syncAllConnections(),
     );
+    if (widget.pendingDashboardConfig != null) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) {
+          _showDashboardAuthDialog(widget.pendingDashboardConfig!);
+          widget.onDashboardConfigShown?.call();
+        }
+      });
+    }
   }
 
   @override
@@ -539,27 +617,6 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     );
   }
 
-  @override
-  void didChangeDependencies() {
-    super.didChangeDependencies();
-    if (!_autoNavigated && _connections.isNotEmpty) {
-      _autoNavigated = true;
-      _maybeAutoNavigate();
-    }
-  }
-
-  void _maybeAutoNavigate() {
-    final lastId = widget.connManager.prefs.getString(_lastConnectionKey);
-    final conn = lastId == null
-        ? (_connections.length == 1 ? _connections.first : null)
-        : (_connections.where((c) => c.id == lastId).firstOrNull ??
-              (_connections.length == 1 ? _connections.first : null));
-    if (conn == null) return;
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (mounted) _navigateToSessions(conn);
-    });
-  }
-
   void _navigateToSessions(SavedConnection conn) {
     widget.connManager.prefs.setString(_lastConnectionKey, conn.id);
     Navigator.push(
@@ -572,7 +629,9 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
           biometricAvailable: widget.biometricAvailable,
           biometricEnabled: widget.biometricEnabled,
           onToggleBiometric: widget.onToggleBiometric,
-          onSwitchConnection: () => Navigator.pop(context),
+          onSwitchConnection: () {
+            Navigator.pop(context);
+          },
           onConfigureDashboard: () {
             Navigator.pop(context);
             WidgetsBinding.instance.addPostFrameCallback((_) {

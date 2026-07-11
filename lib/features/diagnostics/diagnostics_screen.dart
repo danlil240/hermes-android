@@ -10,6 +10,9 @@ class DiagnosticsScreen extends StatefulWidget {
   final SavedConnection connection;
   const DiagnosticsScreen({required this.connection, super.key});
 
+  static final Map<String, Map<String, dynamic>?> cachedStatus = {};
+  static final Map<String, bool> cachedHealth = {};
+
   @override
   State<DiagnosticsScreen> createState() => _DiagnosticsScreenState();
 }
@@ -19,6 +22,7 @@ class _DiagnosticsScreenState extends State<DiagnosticsScreen> {
   Map<String, dynamic>? _statusData;
   bool _healthOk = false;
   bool _loading = true;
+  bool _refreshing = false;
   dynamic _error;
   DateTime? _lastChecked;
   Timer? _autoRefresh;
@@ -43,11 +47,27 @@ class _DiagnosticsScreenState extends State<DiagnosticsScreen> {
     super.dispose();
   }
 
-  Future<void> _load() async {
-    setState(() {
-      _loading = true;
-      _error = null;
-    });
+  Future<void> _load({bool silentRefresh = false}) async {
+    final cacheKey = widget.connection.id;
+    final hasCache = DiagnosticsScreen.cachedHealth.containsKey(cacheKey);
+
+    if (silentRefresh && hasCache) {
+      setState(() => _refreshing = true);
+    } else {
+      setState(() {
+        _loading = true;
+        _error = null;
+      });
+    }
+
+    if (hasCache) {
+      _healthOk = DiagnosticsScreen.cachedHealth[cacheKey]!;
+      _statusData = DiagnosticsScreen.cachedStatus[cacheKey];
+      if (!silentRefresh) {
+        setState(() => _loading = false);
+      }
+    }
+
     try {
       final ok = await _client.healthCheck();
       Map<String, dynamic>? status;
@@ -58,11 +78,14 @@ class _DiagnosticsScreenState extends State<DiagnosticsScreen> {
           status = null;
         }
       }
+      DiagnosticsScreen.cachedHealth[cacheKey] = ok;
+      DiagnosticsScreen.cachedStatus[cacheKey] = status;
       if (!mounted) return;
       setState(() {
         _healthOk = ok;
         _statusData = status;
         _loading = false;
+        _refreshing = false;
         _lastChecked = DateTime.now();
       });
     } catch (e) {
@@ -70,6 +93,7 @@ class _DiagnosticsScreenState extends State<DiagnosticsScreen> {
       setState(() {
         _error = e;
         _loading = false;
+        _refreshing = false;
       });
     }
   }
@@ -109,12 +133,19 @@ class _DiagnosticsScreenState extends State<DiagnosticsScreen> {
           ),
           IconButton(
             icon: const Icon(Icons.refresh),
-            onPressed: _loading ? null : _load,
+            onPressed: (_loading || _refreshing)
+                ? null
+                : () => _load(silentRefresh: true),
             tooltip: 'Refresh',
           ),
         ],
       ),
-      body: _buildBody(),
+      body: Column(
+        children: [
+          if (_refreshing) const LinearProgressIndicator(minHeight: 2),
+          Expanded(child: _buildBody()),
+        ],
+      ),
     );
   }
 

@@ -18,6 +18,8 @@ class CronScreen extends StatefulWidget {
   final SavedConnection connection;
   const CronScreen({required this.connection, super.key});
 
+  static final Map<String, List<Map<String, dynamic>>> cachedJobs = {};
+
   @override
   State<CronScreen> createState() => _CronScreenState();
 }
@@ -26,6 +28,7 @@ class _CronScreenState extends State<CronScreen> {
   late DashboardClient _client;
   List<Map<String, dynamic>> _jobs = [];
   bool _loading = true;
+  bool _refreshing = false;
   dynamic _error;
 
   @override
@@ -51,11 +54,25 @@ class _CronScreenState extends State<CronScreen> {
     super.dispose();
   }
 
-  Future<void> _loadJobs() async {
-    setState(() {
-      _loading = true;
-      _error = null;
-    });
+  Future<void> _loadJobs({bool silentRefresh = false}) async {
+    final cacheKey = widget.connection.id;
+    final hasCache = CronScreen.cachedJobs.containsKey(cacheKey);
+
+    if (silentRefresh && hasCache) {
+      setState(() => _refreshing = true);
+    } else {
+      setState(() {
+        _loading = true;
+        _error = null;
+      });
+    }
+
+    if (hasCache) {
+      _jobs = CronScreen.cachedJobs[cacheKey]!;
+      if (!silentRefresh) {
+        setState(() => _loading = false);
+      }
+    }
 
     try {
       final data = await _client.apiGetList('cron/jobs');
@@ -64,16 +81,20 @@ class _CronScreenState extends State<CronScreen> {
         if (item is Map<String, dynamic>) items.add(item);
       }
 
+      CronScreen.cachedJobs[cacheKey] = items;
+
       if (!mounted) return;
       setState(() {
         _jobs = items;
         _loading = false;
+        _refreshing = false;
       });
     } catch (e) {
       if (!mounted) return;
       setState(() {
         _error = e;
         _loading = false;
+        _refreshing = false;
       });
     }
   }
@@ -378,11 +399,18 @@ class _CronScreenState extends State<CronScreen> {
         actions: [
           IconButton(
             icon: const Icon(Icons.refresh),
-            onPressed: _loading ? null : _loadJobs,
+            onPressed: (_loading || _refreshing)
+                ? null
+                : () => _loadJobs(silentRefresh: true),
           ),
         ],
       ),
-      body: _buildBody(),
+      body: Column(
+        children: [
+          if (_refreshing) const LinearProgressIndicator(minHeight: 2),
+          Expanded(child: _buildBody()),
+        ],
+      ),
       floatingActionButton: FloatingActionButton(
         tooltip: 'Add new cron job',
         onPressed: _loading ? null : _showAddJobDialog,

@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -57,6 +58,136 @@ class _MainNavigationScreenState extends State<MainNavigationScreen> {
   void initState() {
     super.initState();
     _biometricEnabled = widget.biometricEnabled;
+    // Preload all screen data in the background so every tab opens instantly.
+    _preloadAll(widget.connection);
+  }
+
+  /// Fire-and-forget background preload of all screen data.
+  ///
+  /// Creates **one** DashboardClient (single Cloudflare login) for all
+  /// dashboard-based screens (Settings, Cron, Memory, Skills) and **one**
+  /// ApiClient for API-based screens (Services, Diagnostics). All fetches
+  /// run in parallel; failures are silently ignored — each screen retries
+  /// on open.
+  void _preloadAll(SavedConnection conn) {
+    final cacheKey = conn.id;
+
+    // ── Dashboard preloads (single shared login) ──────────────────────
+    if (conn.isDashboardConfigured) {
+      final dash = DashboardClient(
+        host: conn.dashboardHost,
+        port: conn.dashboardPort,
+        pathPrefix: conn.dashboardPrefix ?? "",
+        proxied: conn.dashboardProxied,
+        useHttps: conn.useHttps,
+        username: conn.dashboardUsername,
+        password: conn.dashboardPassword,
+        cfAccessClientId: conn.cfAccessClientId,
+        cfAccessClientSecret: conn.cfAccessClientSecret,
+      );
+
+      // Settings: model info + options
+      unawaited(SettingsScreen.preloadModelData(conn, client: dash));
+
+      // Cron: jobs list
+      if (!CronScreen.cachedJobs.containsKey(cacheKey)) {
+        unawaited(
+          dash.apiGetList('cron/jobs').then((data) {
+            CronScreen.cachedJobs[cacheKey] =
+                data.whereType<Map<String, dynamic>>().toList();
+          }).catchError((_) {}),
+        );
+      }
+
+      // Skills: list
+      if (!SkillsScreen.cachedSkills.containsKey(cacheKey)) {
+        unawaited(
+          dash.getSkills().then((raw) {
+            SkillsScreen.cachedSkills[cacheKey] =
+                raw.whereType<Map<String, dynamic>>().toList();
+          }).catchError((_) {}),
+        );
+      }
+
+      // Memory: try /api/memory first, fall back to /api/config
+      if (!MemoryScreen.cachedEntries.containsKey(cacheKey)) {
+        unawaited(
+          _preloadMemory(dash, cacheKey).catchError((_) {}),
+        );
+      }
+
+      // Close the shared dashboard client after all preloads settle.
+      // We give a generous timeout; each call has its own error handling.
+      Future.delayed(const Duration(seconds: 30), dash.close);
+    }
+
+    // ── API preloads (API key auth, no login needed) ──────────────────
+    final api = ApiClient(
+      baseUrl: conn.baseUrl,
+      apiKey: conn.apiKey,
+      pathPrefix: conn.gatewayPrefix ?? '',
+      cfAccessClientId: conn.cfAccessClientId,
+      cfAccessClientSecret: conn.cfAccessClientSecret,
+    );
+
+    // Services: list
+    if (!ServicesScreen.cachedServices.containsKey(cacheKey)) {
+      unawaited(
+        api.getServices().then((raw) {
+          ServicesScreen.cachedServices[cacheKey] = raw;
+        }).catchError((_) {}),
+      );
+    }
+
+    // Diagnostics: health + status
+    if (!DiagnosticsScreen.cachedHealth.containsKey(cacheKey)) {
+      unawaited(
+        api.healthCheck().then((ok) async {
+          DiagnosticsScreen.cachedHealth[cacheKey] = ok;
+          Map<String, dynamic>? status;
+          if (ok) {
+            try {
+              status = await api.getStatus();
+            } catch (_) {}
+          }
+          DiagnosticsScreen.cachedStatus[cacheKey] = status;
+        }).catchError((_) {}),
+      );
+    }
+
+    // Close the API client after preloads settle.
+    Future.delayed(const Duration(seconds: 30), api.close);
+  }
+
+  /// Fetch memory entries from the dashboard, trying /api/memory first
+  /// and falling back to /api/config.
+  Future<void> _preloadMemory(DashboardClient client, String cacheKey) async {
+    try {
+      final memData = await client.apiGet('memory');
+      final items =
+          memData['entries'] as List? ?? memData['memory'] as List? ?? [];
+      if (items.isNotEmpty) {
+        MemoryScreen.cachedEntries[cacheKey] =
+            items.cast<Map<String, dynamic>>();
+        return;
+      }
+    } catch (_) {
+      // Endpoint not available — fall through to config
+    }
+
+    final config = await client.apiGet('config');
+    final mem = config['memory'];
+    if (mem is List) {
+      MemoryScreen.cachedEntries[cacheKey] = mem.cast<Map<String, dynamic>>();
+    } else if (mem is Map) {
+      final entries = <Map<String, dynamic>>[];
+      mem.forEach((key, value) {
+        entries.add({'target': key, 'content': value.toString()});
+      });
+      MemoryScreen.cachedEntries[cacheKey] = entries;
+    } else {
+      MemoryScreen.cachedEntries[cacheKey] = [];
+    }
   }
 
   @override

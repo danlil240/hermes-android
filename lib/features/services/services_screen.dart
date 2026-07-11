@@ -13,6 +13,8 @@ class ServicesScreen extends StatefulWidget {
   final SavedConnection connection;
   const ServicesScreen({required this.connection, super.key});
 
+  static final Map<String, List<Map<String, dynamic>>> cachedServices = {};
+
   @override
   State<ServicesScreen> createState() => _ServicesScreenState();
 }
@@ -27,6 +29,7 @@ class _ServicesScreenState extends State<ServicesScreen>
   final Map<String, List<String>> _streamedLogs = {};
   final Map<String, List<ServiceRunStep>> _streamedSteps = {};
   bool _loading = true;
+  bool _refreshing = false;
   dynamic _error;
 
   // Service run history (audit log)
@@ -60,23 +63,43 @@ class _ServicesScreenState extends State<ServicesScreen>
     super.dispose();
   }
 
-  Future<void> _load() async {
-    setState(() {
-      _loading = true;
-      _error = null;
-    });
+  Future<void> _load({bool silentRefresh = false}) async {
+    final cacheKey = widget.connection.id;
+    final hasCache = ServicesScreen.cachedServices.containsKey(cacheKey);
+
+    if (silentRefresh && hasCache) {
+      setState(() => _refreshing = true);
+    } else {
+      setState(() {
+        _loading = true;
+        _error = null;
+      });
+    }
+
+    if (hasCache) {
+      _services = ServicesScreen.cachedServices[cacheKey]!
+          .map((s) => ServiceDefinition.fromJson(s))
+          .toList();
+      if (!silentRefresh) {
+        setState(() => _loading = false);
+      }
+    }
+
     try {
       final raw = await _client.getServices();
+      ServicesScreen.cachedServices[cacheKey] = raw;
       if (!mounted) return;
       setState(() {
         _services = raw.map((s) => ServiceDefinition.fromJson(s)).toList();
         _loading = false;
+        _refreshing = false;
       });
     } catch (e) {
       if (!mounted) return;
       setState(() {
         _error = e;
         _loading = false;
+        _refreshing = false;
       });
     }
   }
@@ -968,7 +991,9 @@ class _ServicesScreenState extends State<ServicesScreen>
         actions: [
           IconButton(
             icon: const Icon(Icons.refresh),
-            onPressed: _loading ? null : _load,
+            onPressed: (_loading || _refreshing)
+                ? null
+                : () => _load(silentRefresh: true),
           ),
         ],
         bottom: TabBar(
@@ -979,11 +1004,18 @@ class _ServicesScreenState extends State<ServicesScreen>
           ],
         ),
       ),
-      body: TabBarView(
-        controller: _tabController,
+      body: Column(
         children: [
-          _buildBody(),
-          _buildHistoryTab(),
+          if (_refreshing) const LinearProgressIndicator(minHeight: 2),
+          Expanded(
+            child: TabBarView(
+              controller: _tabController,
+              children: [
+                _buildBody(),
+                _buildHistoryTab(),
+              ],
+            ),
+          ),
         ],
       ),
     );
