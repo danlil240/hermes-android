@@ -4,6 +4,13 @@ All notable changes to this project are documented here. This project adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html). Release notes for
 versions prior to 1.0.7 are in the **What's new** sections of the [README](README.md).
 
+## [1.0.16]
+
+### Added
+- **Instant connection startup** — with one saved connection, the app now opens it directly; with multiple connections, it reopens the last-used connection.
+- **Session and conversation cache** — session lists and chat history render immediately from a per-connection local cache while the server refreshes in the background.
+- **Background synchronization** — cached sessions and changed conversations refresh periodically without opening each session.
+
 ## [1.0.15]
 
 ### Fixed

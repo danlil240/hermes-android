@@ -15,6 +15,7 @@ import 'package:speech_to_text/speech_to_text.dart';
 import '../../core/models/question.dart';
 import '../../core/network/connection_manager.dart';
 import '../../core/network/background_chat_service.dart';
+import '../../core/storage/session_cache.dart';
 import '../questions/question_widgets.dart';
 import '../../shared/responsive.dart';
 import '../../shared/external_links.dart';
@@ -42,6 +43,7 @@ class _ChatScreenState extends State<ChatScreen>
   String? _error;
   late final ApiClient _client;
   late final GatewayChatClient _gateway;
+  SessionCache? _cache;
   StreamSubscription<BackgroundChatEvent>? _backgroundChatEvents;
 
   // Chat sending state
@@ -86,7 +88,7 @@ class _ChatScreenState extends State<ChatScreen>
     _backgroundChatEvents = BackgroundChatService.events.listen(
       _handleBackgroundChatEvent,
     );
-    _fetchMessages();
+    _initializeCacheAndFetch();
     _loadVerboseMode();
     _initVoice();
     _scrollController.addListener(_onScroll);
@@ -267,11 +269,28 @@ class _ChatScreenState extends State<ChatScreen>
     }
   }
 
+  Future<void> _initializeCacheAndFetch() async {
+    final prefs = await SharedPreferences.getInstance();
+    _cache = SessionCache(prefs, widget.connection.id);
+    final cached = _cache!.loadMessages(widget.session.id);
+    if (cached.isNotEmpty && mounted) {
+      _extractToolMessages(cached);
+      _extractQuestionBlocks(cached);
+      setState(() {
+        _messages = cached;
+        _loading = false;
+      });
+    }
+    await _fetchMessages();
+  }
+
   Future<void> _fetchMessages({bool refreshAfterResume = false}) async {
-    setState(() {
-      _loading = true;
-      _error = null;
-    });
+    if (_messages.isEmpty) {
+      setState(() {
+        _loading = true;
+        _error = null;
+      });
+    }
 
     try {
       final messages = await _client.getMessages(widget.session.id);
@@ -282,6 +301,7 @@ class _ChatScreenState extends State<ChatScreen>
       if (!mounted) return;
       setState(() {
         _messages = messages;
+        _cache?.saveMessages(widget.session.id, messages);
         if (refreshAfterResume &&
             messages.isNotEmpty &&
             messages.last['role'] == 'assistant') {
@@ -358,6 +378,7 @@ class _ChatScreenState extends State<ChatScreen>
       if (!mounted) return;
       setState(() {
         _messages = messages;
+        _cache?.saveMessages(widget.session.id, messages);
         _streaming = false;
         _sending = false;
         _showScrollToBottom = false;
@@ -589,6 +610,7 @@ class _ChatScreenState extends State<ChatScreen>
           if (!mounted) return;
           setState(() {
             _messages = messages;
+            _cache?.saveMessages(widget.session.id, messages);
             _streaming = false;
             _sending = false;
             _showScrollToBottom = false;

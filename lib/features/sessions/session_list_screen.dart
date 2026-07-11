@@ -4,6 +4,8 @@ import 'dart:async';
 import '../../core/network/connection_manager.dart';
 import '../../shared/errors/error_messages.dart';
 import '../../shared/responsive.dart';
+import '../../core/storage/session_cache.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import '../chat/chat_screen.dart';
 import '../settings/settings_screen.dart';
 import '../memory/memory_screen.dart';
@@ -14,7 +16,12 @@ import '../services/services_screen.dart';
 
 class SessionListScreen extends StatefulWidget {
   final SavedConnection connection;
-  const SessionListScreen({required this.connection, super.key});
+  final SharedPreferences prefs;
+  const SessionListScreen({
+    required this.connection,
+    required this.prefs,
+    super.key,
+  });
 
   @override
   State<SessionListScreen> createState() => _SessionListScreenState();
@@ -22,11 +29,13 @@ class SessionListScreen extends StatefulWidget {
 
 class _SessionListScreenState extends State<SessionListScreen> {
   late final ApiClient _client;
+  late final SessionCache _cache;
   List<Session> _sessions = [];
   bool _loading = true;
   String? _error;
   bool _healthOk = false;
   String _searchQuery = '';
+  Timer? _backgroundRefresh;
 
   List<Session> get _filteredSessions {
     if (_searchQuery.isEmpty) return _sessions;
@@ -49,7 +58,17 @@ class _SessionListScreenState extends State<SessionListScreen> {
       cfAccessClientId: widget.connection.cfAccessClientId,
       cfAccessClientSecret: widget.connection.cfAccessClientSecret,
     );
+    _cache = SessionCache(widget.prefs, widget.connection.id);
+    final cached = _cache.loadSessions();
+    if (cached.isNotEmpty) {
+      _sessions = cached;
+      _loading = false;
+    }
     _checkHealth();
+    _backgroundRefresh = Timer.periodic(
+      const Duration(seconds: 30),
+      (_) => _fetchSessions(silent: true),
+    );
   }
 
   Future<void> _checkHealth() async {
@@ -70,12 +89,13 @@ class _SessionListScreenState extends State<SessionListScreen> {
 
   @override
   void dispose() {
+    _backgroundRefresh?.cancel();
     _client.close();
     super.dispose();
   }
 
-  Future<void> _fetchSessions({bool isRetry = false}) async {
-    if (!isRetry) {
+  Future<void> _fetchSessions({bool isRetry = false, bool silent = false}) async {
+    if (!isRetry && !silent && _sessions.isEmpty) {
       setState(() {
         _loading = true;
         _error = null;
@@ -88,6 +108,9 @@ class _SessionListScreenState extends State<SessionListScreen> {
         _sessions = sessions;
         _loading = false;
       });
+      final previousSessions = _cache.loadSessions();
+      await _cache.saveSessions(sessions);
+      _prefetchMessages(sessions, previousSessions);
     } catch (e) {
       if (!mounted) return;
       setState(() {
@@ -98,6 +121,32 @@ class _SessionListScreenState extends State<SessionListScreen> {
         _retryWithBackoff();
       }
     }
+  }
+
+  Future<void> _prefetchMessages(
+    List<Session> sessions,
+    List<Session> previousSessions,
+  ) async {
+    // Do not make the list wait for conversation bodies. Each session gets
+    // refreshed independently and becomes instant the next time it opens.
+    final previousById = {
+      for (final session in previousSessions) session.id: session,
+    };
+    await Future.wait(
+      sessions.where((session) {
+        final previous = previousById[session.id];
+        return _cache.loadMessages(session.id).isEmpty ||
+            previous == null ||
+            previous.messageCount != session.messageCount;
+      }).map((session) async {
+        try {
+          final messages = await _client.getMessages(session.id);
+          await _cache.saveMessages(session.id, messages);
+        } catch (_) {
+          // A single deleted/remote session must not stop the other refreshes.
+        }
+      }),
+    );
   }
 
   void _retryWithBackoff() {

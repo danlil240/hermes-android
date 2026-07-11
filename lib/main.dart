@@ -1,9 +1,11 @@
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'dart:async';
 import 'core/auth/biometric_lock.dart';
 import 'core/network/connection_manager.dart';
 import 'core/storage/secure_storage.dart';
+import 'core/storage/session_cache.dart';
 import 'features/sessions/session_list_screen.dart';
 import 'shared/responsive.dart';
 
@@ -286,20 +288,91 @@ class HomeScreen extends StatefulWidget {
   State<HomeScreen> createState() => _HomeScreenState();
 }
 
-class _HomeScreenState extends State<HomeScreen> {
+class _HomeScreenState extends State<HomeScreen>
+    with WidgetsBindingObserver {
   List<SavedConnection> _connections = [];
   bool _autoNavigated = false;
+  Timer? _backgroundSync;
   static const String _lastConnectionKey = 'last_connection_id';
 
   Future<void> _refresh() async {
     final conns = await widget.connManager.getConnectionsWithSecrets();
-    if (mounted) setState(() => _connections = conns);
+    if (!mounted) return;
+    setState(() => _connections = conns);
+    if (!_autoNavigated && conns.isNotEmpty) {
+      _autoNavigated = true;
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) _maybeAutoNavigate();
+      });
+    }
   }
 
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     _refresh();
+    _backgroundSync = Timer.periodic(
+      const Duration(seconds: 45),
+      (_) => _syncAllConnections(),
+    );
+  }
+
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    _backgroundSync?.cancel();
+    super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.paused) {
+      // Push one refresh before Android throttles Dart timers in the
+      // background. The periodic loop continues when the process remains
+      // alive, and retries when the app returns.
+      _syncAllConnections();
+    }
+  }
+
+  Future<void> _syncAllConnections() async {
+    final connections = await widget.connManager.getConnectionsWithSecrets();
+    await Future.wait(connections.map((connection) async {
+      final client = ApiClient(
+        baseUrl: connection.baseUrl,
+        apiKey: connection.apiKey,
+        pathPrefix: connection.gatewayPrefix ?? '',
+        cfAccessClientId: connection.cfAccessClientId,
+        cfAccessClientSecret: connection.cfAccessClientSecret,
+      );
+      try {
+        final sessions = await client.getSessions();
+        final cache = SessionCache(widget.connManager.prefs, connection.id);
+        final previousById = {
+          for (final session in cache.loadSessions()) session.id: session,
+        };
+        await cache.saveSessions(sessions);
+        await Future.wait(sessions.where((session) {
+          final previous = previousById[session.id];
+          return cache.loadMessages(session.id).isEmpty ||
+              previous == null ||
+              previous.messageCount != session.messageCount;
+        }).map((session) async {
+          try {
+            await cache.saveMessages(
+              session.id,
+              await client.getMessages(session.id),
+            );
+          } catch (_) {
+            // Keep the last good copy for an individual session.
+          }
+        }));
+      } catch (_) {
+        // Offline connections are retried on the next interval.
+      } finally {
+        client.close();
+      }
+    }));
   }
 
   @override
@@ -313,8 +386,10 @@ class _HomeScreenState extends State<HomeScreen> {
 
   void _maybeAutoNavigate() {
     final lastId = widget.connManager.prefs.getString(_lastConnectionKey);
-    if (lastId == null) return;
-    final conn = _connections.where((c) => c.id == lastId).firstOrNull;
+    final conn = lastId == null
+        ? (_connections.length == 1 ? _connections.first : null)
+        : (_connections.where((c) => c.id == lastId).firstOrNull ??
+            (_connections.length == 1 ? _connections.first : null));
     if (conn == null) return;
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (mounted) _navigateToSessions(conn);
@@ -325,7 +400,12 @@ class _HomeScreenState extends State<HomeScreen> {
     widget.connManager.prefs.setString(_lastConnectionKey, conn.id);
     Navigator.push(
       context,
-      MaterialPageRoute(builder: (_) => SessionListScreen(connection: conn)),
+      MaterialPageRoute(
+        builder: (_) => SessionListScreen(
+          connection: conn,
+          prefs: widget.connManager.prefs,
+        ),
+      ),
     );
   }
 
