@@ -851,28 +851,25 @@ class GatewayChatClient {
     return null;
   }
 
-  /// Starts an Android foreground service to own the streaming request.
+  /// Submits a server-owned run and asks Android to synchronize its status.
   ///
-  /// The service keeps the request alive when the Flutter activity is closed
-  /// and posts a completion notification while Hermes is replying. Other
-  /// platforms intentionally return false and use [sendMessageStreaming].
+  /// The Android service never owns the model/tool request. POST /v1/runs
+  /// returns immediately and Hermes continues the run on the server even if
+  /// the phone process and its network connection disappear.
   Future<bool> startMessageInBackground({
     required String message,
     required String sessionId,
     String? model,
     List<Map<String, dynamic>>? history,
   }) {
-    final messages = buildChatCompletionMessages(
-      message: message,
-      history: history,
-    );
     return BackgroundChatService.start(
-      endpoint: '$_baseUrl/v1/chat/completions',
-      headers: {..._api._headers, 'X-Hermes-Session-Id': sessionId},
+      endpoint: '$_baseUrl/v1/runs',
+      headers: _api._headers,
       body: jsonEncode({
         'model': model ?? 'hermes-agent',
-        'messages': messages,
-        'stream': true,
+        'input': message,
+        'session_id': sessionId,
+        'conversation_history': history ?? const <Map<String, dynamic>>[],
       }),
       sessionId: sessionId,
     );

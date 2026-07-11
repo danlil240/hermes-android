@@ -30,8 +30,7 @@ class BackgroundChatEvent {
   }
 }
 
-/// Bridge to the native Android foreground service that owns an in-flight
-/// Hermes streaming request.
+/// Bridge to Android's status-sync service for server-owned Hermes runs.
 ///
 /// Calls gracefully return `false` on platforms that do not implement the
 /// bridge, allowing the normal Dart SSE client to remain the fallback.

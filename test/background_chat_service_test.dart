@@ -12,30 +12,30 @@ void main() {
         .setMockMethodCallHandler(channel, null);
   });
 
-  test('hands a complete streaming request to the Android foreground service',
+  test('submits a server-owned run for background synchronization',
       () async {
     TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
         .setMockMethodCallHandler(channel, (call) async {
       expect(call.method, 'startChat');
       expect(call.arguments, {
-        'endpoint': 'https://hermes.example.com/v1/chat/completions',
+        'endpoint': 'https://hermes.example.com/v1/runs',
         'headers': {
           'Authorization': 'Bearer key',
           'X-Hermes-Session-Id': 'session-123',
         },
-        'body': '{"stream":true}',
+        'body': '{"input":"hello","session_id":"session-123"}',
         'sessionId': 'session-123',
       });
       return true;
     });
 
     final started = await BackgroundChatService.start(
-      endpoint: 'https://hermes.example.com/v1/chat/completions',
+      endpoint: 'https://hermes.example.com/v1/runs',
       headers: const {
         'Authorization': 'Bearer key',
         'X-Hermes-Session-Id': 'session-123',
       },
-      body: '{"stream":true}',
+      body: '{"input":"hello","session_id":"session-123"}',
       sessionId: 'session-123',
     );
 

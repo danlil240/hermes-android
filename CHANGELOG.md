@@ -4,6 +4,12 @@ All notable changes to this project are documented here. This project adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html). Release notes for
 versions prior to 1.0.7 are in the **What's new** sections of the [README](README.md).
 
+## [1.0.14]
+
+### Fixed
+- **Server-owned chat runs** — Android now submits `POST /v1/runs` and only polls the run status. Closing or swiping away the app can no longer cancel the Hermes agent execution.
+- **Reconnectable conversation sync** — when the app returns, it reads the completed server-side session from the Hermes API.
+
 ## [1.0.13]
 
 ### Fixed

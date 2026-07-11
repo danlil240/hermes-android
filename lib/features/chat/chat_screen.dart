@@ -526,9 +526,9 @@ class _ChatScreenState extends State<ChatScreen> {
 
     WidgetsBinding.instance.addPostFrameCallback((_) => _scrollToBottom());
 
-    // Android owns the request in a foreground service so the server-side
-    // session can finish even after the activity is closed. Other platforms
-    // fall back to the existing Dart SSE client.
+    // Android submits a server-owned run. The foreground service only polls
+    // status for a notification; the Hermes server owns execution and keeps
+    // it alive after the app or phone disconnects.
     final startedInBackground = await _gateway.startMessageInBackground(
       message: text,
       sessionId: widget.session.id,

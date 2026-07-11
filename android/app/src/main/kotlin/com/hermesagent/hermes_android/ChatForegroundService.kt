@@ -10,16 +10,14 @@ import android.os.Build
 import android.os.IBinder
 import androidx.core.app.NotificationCompat
 import org.json.JSONObject
-import java.io.BufferedReader
-import java.io.OutputStreamWriter
 import java.net.HttpURLConnection
 import java.net.URL
 import kotlin.concurrent.thread
 
 /**
- * Owns an in-flight Hermes SSE chat request independently of the Flutter
- * activity. A foreground service is the Android-supported way to continue a
- * user-initiated long-running network operation after the app UI is closed.
+ * Submits a run to Hermes and synchronizes its status. The Hermes server owns
+ * the model/tool execution; this service is only a reconnectable status
+ * observer and cannot cancel the server-side run when the Activity disappears.
  */
 class ChatForegroundService : Service() {
     companion object {
@@ -51,48 +49,69 @@ class ChatForegroundService : Service() {
 
         createChannels()
         startForeground(WORK_NOTIFICATION_ID, workingNotification())
-        thread(name = "hermes-chat-$sessionId") {
-            runChat(endpoint, headers, body, sessionId)
+        thread(name = "hermes-run-sync-$sessionId") {
+            submitAndSyncRun(endpoint, headers, body, sessionId)
             stopSelf(startId)
         }
         return START_NOT_STICKY
     }
 
-    private fun runChat(
+    private fun submitAndSyncRun(
         endpoint: String,
         headers: Map<String, String>,
         body: String,
         sessionId: String,
     ) {
         var connection: HttpURLConnection? = null
-        val response = StringBuilder()
         try {
+            // POST /v1/runs returns immediately. Hermes continues the agent
+            // run on the server after this request has ended.
             connection = (URL(endpoint).openConnection() as HttpURLConnection).apply {
                 requestMethod = "POST"
                 doOutput = true
                 connectTimeout = 20_000
-                readTimeout = 0
-                setRequestProperty("Accept", "text/event-stream")
+                readTimeout = 30_000
+                setRequestProperty("Accept", "application/json")
                 headers.forEach { (name, value) -> setRequestProperty(name, value) }
             }
-            OutputStreamWriter(connection.outputStream, Charsets.UTF_8).use { writer ->
-                writer.write(body)
-            }
+            connection.outputStream.use { it.write(body.toByteArray(Charsets.UTF_8)) }
 
             if (connection.responseCode !in 200..299) {
                 val message = connection.errorStream?.bufferedReader()?.use { it.readText() }
-                    ?.takeIf { it.isNotBlank() }
-                    ?: "HTTP ${connection.responseCode}"
+                    ?.takeIf { it.isNotBlank() } ?: "HTTP ${connection.responseCode}"
                 sendEvent(sessionId, "error", error = message)
                 notifyFailure(message)
                 return
             }
 
-            connection.inputStream.bufferedReader().use { reader ->
-                readSse(reader, sessionId, response)
+            val runId = connection.inputStream.bufferedReader().use { JSONObject(it.readText()).optString("run_id") }
+            if (runId.isBlank()) throw IllegalStateException("Hermes did not return a run_id")
+            connection.disconnect()
+            connection = null
+
+            var lastStatus = ""
+            while (true) {
+                val status = getRunStatus(endpoint, headers, runId)
+                val state = status.optString("status")
+                if (state != lastStatus) {
+                    lastStatus = state
+                    sendEvent(sessionId, "status", error = state)
+                }
+                when (state) {
+                    "completed" -> {
+                        sendEvent(sessionId, "done")
+                        if (!MainActivity.isActivityVisible) notifyReply(status.optString("output"))
+                        return
+                    }
+                    "failed", "cancelled" -> {
+                        val message = status.optString("error").ifBlank { "Hermes run $state" }
+                        sendEvent(sessionId, "error", error = message)
+                        notifyFailure(message)
+                        return
+                    }
+                }
+                Thread.sleep(2000)
             }
-            sendEvent(sessionId, "done")
-            if (!MainActivity.isActivityVisible) notifyReply(response.toString())
         } catch (error: Exception) {
             val message = error.message ?: "Connection to Hermes failed"
             sendEvent(sessionId, "error", error = message)
@@ -102,45 +121,23 @@ class ChatForegroundService : Service() {
         }
     }
 
-    private fun readSse(reader: BufferedReader, sessionId: String, response: StringBuilder) {
-        val dataLines = mutableListOf<String>()
-        fun consumeFrame() {
-            if (dataLines.isEmpty()) return
-            val data = dataLines.joinToString("\n").trim()
-            dataLines.clear()
-            if (data.isEmpty() || data == "[DONE]") return
-            val token = parseToken(data) ?: return
-            response.append(token)
-            sendEvent(sessionId, "token", token = token)
+    private fun getRunStatus(endpoint: String, headers: Map<String, String>, runId: String): JSONObject {
+        val statusUrl = endpoint.substringBeforeLast("/runs") + "/runs/" + runId
+        val connection = (URL(statusUrl).openConnection() as HttpURLConnection).apply {
+            requestMethod = "GET"
+            connectTimeout = 20_000
+            readTimeout = 30_000
+            headers.forEach { (name, value) -> setRequestProperty(name, value) }
         }
-
-        while (true) {
-            val line = reader.readLine() ?: break
-            when {
-                line.isEmpty() -> consumeFrame()
-                line.startsWith("data:") -> dataLines += line.removePrefix("data:").trimStart()
-            }
+        return try {
+            if (connection.responseCode !in 200..299) throw IllegalStateException("HTTP ${connection.responseCode}")
+            connection.inputStream.bufferedReader().use { JSONObject(it.readText()) }
+        } finally {
+            connection.disconnect()
         }
-        consumeFrame()
     }
 
-    private fun parseToken(data: String): String? = try {
-        val choices = JSONObject(data).optJSONArray("choices") ?: return null
-        if (choices.length() == 0) return null
-        choices.optJSONObject(0)
-            ?.optJSONObject("delta")
-            ?.optString("content")
-            ?.takeIf { it.isNotEmpty() }
-    } catch (_: Exception) {
-        null
-    }
-
-    private fun sendEvent(
-        sessionId: String,
-        type: String,
-        token: String? = null,
-        error: String? = null,
-    ) {
+    private fun sendEvent(sessionId: String, type: String, token: String? = null, error: String? = null) {
         sendBroadcast(Intent(ACTION_CHAT_EVENT).setPackage(packageName).apply {
             putExtra(EXTRA_SESSION_ID, sessionId)
             putExtra(EXTRA_TYPE, type)
@@ -152,70 +149,37 @@ class ChatForegroundService : Service() {
     private fun createChannels() {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return
         val manager = getSystemService(NotificationManager::class.java)
-        manager.createNotificationChannel(
-            NotificationChannel(
-                WORK_CHANNEL,
-                "Hermes active chats",
-                NotificationManager.IMPORTANCE_LOW,
-            ).apply { description = "Shows when Hermes is finishing a request." },
-        )
-        manager.createNotificationChannel(
-            NotificationChannel(
-                REPLY_CHANNEL,
-                "Hermes replies",
-                NotificationManager.IMPORTANCE_DEFAULT,
-            ).apply { description = "Notifies you when Hermes has replied." },
-        )
+        manager.createNotificationChannel(NotificationChannel(WORK_CHANNEL, "Hermes active chats", NotificationManager.IMPORTANCE_LOW))
+        manager.createNotificationChannel(NotificationChannel(REPLY_CHANNEL, "Hermes replies", NotificationManager.IMPORTANCE_DEFAULT))
     }
 
     private fun workingNotification() = NotificationCompat.Builder(this, WORK_CHANNEL)
         .setSmallIcon(R.mipmap.ic_launcher)
         .setContentTitle("Hermes is working")
-        .setContentText("Your session will continue if you leave the app.")
+        .setContentText("The session is running on your Hermes server.")
         .setOngoing(true)
         .build()
 
     private fun notifyReply(reply: String) {
-        val preview = reply.trim().replace(Regex("\\s+"), " ")
-            .ifBlank { "Hermes finished your request." }
-            .take(240)
-        notificationManager().notify(
-            (System.currentTimeMillis() % Int.MAX_VALUE).toInt(),
-            NotificationCompat.Builder(this, REPLY_CHANNEL)
-                .setSmallIcon(R.mipmap.ic_launcher)
-                .setContentTitle("Hermes replied")
-                .setContentText(preview)
-                .setStyle(NotificationCompat.BigTextStyle().bigText(preview))
-                .setContentIntent(launchIntent())
-                .setAutoCancel(true)
-                .build(),
-        )
+        val preview = reply.trim().replace(Regex("\\s+"), " ").ifBlank { "Hermes finished your request." }.take(240)
+        notificationManager().notify((System.currentTimeMillis() % Int.MAX_VALUE).toInt(), NotificationCompat.Builder(this, REPLY_CHANNEL)
+            .setSmallIcon(R.mipmap.ic_launcher).setContentTitle("Hermes replied")
+            .setContentText(preview).setStyle(NotificationCompat.BigTextStyle().bigText(preview))
+            .setContentIntent(launchIntent()).setAutoCancel(true).build())
     }
 
     private fun notifyFailure(message: String) {
         if (MainActivity.isActivityVisible) return
-        notificationManager().notify(
-            (System.currentTimeMillis() % Int.MAX_VALUE).toInt(),
-            NotificationCompat.Builder(this, REPLY_CHANNEL)
-                .setSmallIcon(R.mipmap.ic_launcher)
-                .setContentTitle("Hermes chat failed")
-                .setContentText(message.take(240))
-                .setContentIntent(launchIntent())
-                .setAutoCancel(true)
-                .build(),
-        )
+        notificationManager().notify((System.currentTimeMillis() % Int.MAX_VALUE).toInt(), NotificationCompat.Builder(this, REPLY_CHANNEL)
+            .setSmallIcon(R.mipmap.ic_launcher).setContentTitle("Hermes chat failed")
+            .setContentText(message.take(240)).setContentIntent(launchIntent()).setAutoCancel(true).build())
     }
 
     private fun launchIntent(): PendingIntent {
         val intent = packageManager.getLaunchIntentForPackage(packageName)?.apply {
             flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
         } ?: Intent()
-        return PendingIntent.getActivity(
-            this,
-            0,
-            intent,
-            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
-        )
+        return PendingIntent.getActivity(this, 0, intent, PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
     }
 
     private fun notificationManager() = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
