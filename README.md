@@ -26,11 +26,15 @@ The app connects to your Hermes server over your home Wi-Fi, a private Tailscale
 
 ## Current release
 
-- Version: **1.0.14**
+- Version: **1.0.15**
 - Package: `com.hermesagent.hermes_android`
 - Recommended APK for most modern phones: `app-arm64-v8a-release.apk`
 - Other APKs: `app-armeabi-v7a-release.apk`, `app-x86_64-release.apk`
 - Download: [GitHub Releases](https://github.com/danlil240/hermes-android/releases/latest)
+
+## What's new in v1.0.15
+
+- **Notification conversation refresh** — tapping a reply notification now immediately shows the completed answer in the conversation.
 
 ## What's new in v1.0.14
 

@@ -34,7 +34,8 @@ class ChatScreen extends StatefulWidget {
   State<ChatScreen> createState() => _ChatScreenState();
 }
 
-class _ChatScreenState extends State<ChatScreen> {
+class _ChatScreenState extends State<ChatScreen>
+    with WidgetsBindingObserver {
   List<Map<String, dynamic>> _messages = [];
   final List<Map<String, dynamic>> _toolMessages = [];
   bool _loading = true;
@@ -73,6 +74,7 @@ class _ChatScreenState extends State<ChatScreen> {
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     _client = ApiClient(
       baseUrl: widget.connection.baseUrl,
       apiKey: widget.connection.apiKey,
@@ -98,6 +100,7 @@ class _ChatScreenState extends State<ChatScreen> {
   @override
   void dispose() {
     _savedPositions[widget.session.id] = _lastPixels;
+    WidgetsBinding.instance.removeObserver(this);
     _backgroundChatEvents?.cancel();
     _speechToText.cancel();
     _flutterTts.stop();
@@ -106,6 +109,17 @@ class _ChatScreenState extends State<ChatScreen> {
     _scrollController.removeListener(_onScroll);
     _scrollController.dispose();
     super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed && mounted) {
+      // A notification can resume the app after the Android foreground
+      // service completed the server-owned run. The screen may have missed
+      // the one-shot event while its Activity was stopped, so always reload
+      // the authoritative server history when returning to the foreground.
+      _fetchMessages(refreshAfterResume: true);
+    }
   }
 
   Future<void> _initVoice() async {
@@ -253,7 +267,7 @@ class _ChatScreenState extends State<ChatScreen> {
     }
   }
 
-  Future<void> _fetchMessages() async {
+  Future<void> _fetchMessages({bool refreshAfterResume = false}) async {
     setState(() {
       _loading = true;
       _error = null;
@@ -268,6 +282,12 @@ class _ChatScreenState extends State<ChatScreen> {
       if (!mounted) return;
       setState(() {
         _messages = messages;
+        if (refreshAfterResume &&
+            messages.isNotEmpty &&
+            messages.last['role'] == 'assistant') {
+          _streaming = false;
+          _sending = false;
+        }
         _loading = false;
       });
       final saved = _savedPositions[widget.session.id];

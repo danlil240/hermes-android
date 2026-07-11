@@ -4,6 +4,11 @@ All notable changes to this project are documented here. This project adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html). Release notes for
 versions prior to 1.0.7 are in the **What's new** sections of the [README](README.md).
 
+## [1.0.15]
+
+### Fixed
+- **Notification conversation refresh** — tapping a reply notification now refreshes the open conversation from the server, so the completed answer appears immediately instead of requiring a trip through All Sessions.
+
 ## [1.0.14]
 
 ### Fixed
