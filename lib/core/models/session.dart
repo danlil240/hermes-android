@@ -36,7 +36,10 @@ class Session {
 
   static bool isAutoTitleCandidate(Session session, String title) {
     final normalized = _collapseWhitespace(title);
-    if (session.hasGeneratedTitle) return true;
+    if (session.hasGeneratedTitle &&
+        normalized == _collapseWhitespace(session.title)) {
+      return true;
+    }
     if (isPlaceholderTitle(normalized)) return true;
     return normalized ==
         displayTitle(
