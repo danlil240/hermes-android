@@ -1,6 +1,8 @@
 // Chat screen with real-time streaming via REST API.
 // Uses REST endpoints: POST /api/sessions/{id}/chat and
 // GET /api/sessions/{id}/messages.
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_markdown/flutter_markdown.dart';
 import 'package:flutter_tts/flutter_tts.dart';
@@ -12,6 +14,7 @@ import 'package:speech_to_text/speech_to_text.dart';
 
 import '../../core/models/question.dart';
 import '../../core/network/connection_manager.dart';
+import '../../core/network/background_chat_service.dart';
 import '../questions/question_widgets.dart';
 import '../../shared/responsive.dart';
 import '../../shared/external_links.dart';
@@ -38,6 +41,7 @@ class _ChatScreenState extends State<ChatScreen> {
   String? _error;
   late final ApiClient _client;
   late final GatewayChatClient _gateway;
+  StreamSubscription<BackgroundChatEvent>? _backgroundChatEvents;
 
   // Chat sending state
   final _textController = TextEditingController();
@@ -77,6 +81,9 @@ class _ChatScreenState extends State<ChatScreen> {
       cfAccessClientSecret: widget.connection.cfAccessClientSecret,
     );
     _gateway = GatewayChatClient(_client);
+    _backgroundChatEvents = BackgroundChatService.events.listen(
+      _handleBackgroundChatEvent,
+    );
     _fetchMessages();
     _loadVerboseMode();
     _initVoice();
@@ -91,6 +98,7 @@ class _ChatScreenState extends State<ChatScreen> {
   @override
   void dispose() {
     _savedPositions[widget.session.id] = _lastPixels;
+    _backgroundChatEvents?.cancel();
     _speechToText.cancel();
     _flutterTts.stop();
     _client.close();
@@ -297,6 +305,53 @@ class _ChatScreenState extends State<ChatScreen> {
     }
   }
 
+  void _handleBackgroundChatEvent(BackgroundChatEvent event) {
+    if (!mounted || event.sessionId != widget.session.id || !_streaming) return;
+
+    switch (event.type) {
+      case 'token':
+        final token = event.token;
+        if (token == null || token.isEmpty) return;
+        setState(() {
+          if (_messages.isNotEmpty && _messages.last['role'] == 'assistant') {
+            _messages.last['content'] =
+                (_messages.last['content'] as String) + token;
+          }
+        });
+        return;
+      case 'done':
+        _completeBackgroundStream();
+        return;
+      case 'error':
+        _handleSendError('', event.error ?? 'Background chat failed');
+        return;
+    }
+  }
+
+  Future<void> _completeBackgroundStream() async {
+    try {
+      final messages = await _client.getMessages(widget.session.id);
+      if (!mounted) return;
+      _extractToolMessages(messages);
+      _extractQuestionBlocks(messages);
+      await _fetchSessionQuestions();
+      if (!mounted) return;
+      setState(() {
+        _messages = messages;
+        _streaming = false;
+        _sending = false;
+        _showScrollToBottom = false;
+      });
+      WidgetsBinding.instance.addPostFrameCallback((_) => _scrollToBottom());
+    } catch (_) {
+      if (!mounted) return;
+      setState(() {
+        _streaming = false;
+        _sending = false;
+      });
+    }
+  }
+
   void _extractToolMessages(List<Map<String, dynamic>> messages) {
     _toolMessages.clear();
     for (final msg in messages) {
@@ -470,6 +525,16 @@ class _ChatScreenState extends State<ChatScreen> {
     });
 
     WidgetsBinding.instance.addPostFrameCallback((_) => _scrollToBottom());
+
+    // Android owns the request in a foreground service so the server-side
+    // session can finish even after the activity is closed. Other platforms
+    // fall back to the existing Dart SSE client.
+    final startedInBackground = await _gateway.startMessageInBackground(
+      message: text,
+      sessionId: widget.session.id,
+      history: history,
+    );
+    if (startedInBackground) return;
 
     // Accumulate tokens into the streaming placeholder
     await _gateway.sendMessageStreaming(

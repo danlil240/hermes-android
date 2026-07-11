@@ -4,6 +4,16 @@ All notable changes to this project are documented here. This project adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html). Release notes for
 versions prior to 1.0.7 are in the **What's new** sections of the [README](README.md).
 
+## [Unreleased]
+
+### Fixed
+- **Android chat work now survives leaving the app** — each user-initiated
+  Hermes reply is owned by an Android foreground data-sync service, rather than
+  by the chat screen or Flutter activity.
+- **Reply notifications while away from the app** — Android asks for notification
+  permission on first use and shows a reply (or failure) notification when the
+  activity is no longer visible.
+
 ## [1.0.11]
 
 ### Fixed

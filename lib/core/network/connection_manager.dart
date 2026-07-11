@@ -4,6 +4,7 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 import 'package:http/http.dart' as http;
+import 'background_chat_service.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:uuid/uuid.dart';
 import '../models/connection.dart';
@@ -848,6 +849,33 @@ class GatewayChatClient {
       return null;
     }
     return null;
+  }
+
+  /// Starts an Android foreground service to own the streaming request.
+  ///
+  /// The service keeps the request alive when the Flutter activity is closed
+  /// and posts a completion notification while Hermes is replying. Other
+  /// platforms intentionally return false and use [sendMessageStreaming].
+  Future<bool> startMessageInBackground({
+    required String message,
+    required String sessionId,
+    String? model,
+    List<Map<String, dynamic>>? history,
+  }) {
+    final messages = buildChatCompletionMessages(
+      message: message,
+      history: history,
+    );
+    return BackgroundChatService.start(
+      endpoint: '$_baseUrl/v1/chat/completions',
+      headers: {..._api._headers, 'X-Hermes-Session-Id': sessionId},
+      body: jsonEncode({
+        'model': model ?? 'hermes-agent',
+        'messages': messages,
+        'stream': true,
+      }),
+      sessionId: sessionId,
+    );
   }
 
   /// Send a message and stream the assistant response token-by-token.
