@@ -51,4 +51,27 @@ void main() {
 
     expect(second.loadSessions(), isEmpty);
   });
+
+  test('restores generated-title metadata', () async {
+    SharedPreferences.setMockInitialValues({});
+    final prefs = await SharedPreferences.getInstance();
+    final cache = SessionCache(prefs, 'connection-a');
+    final session = Session(
+      id: 's1',
+      title: 'Chat 2026-07-11 12:00',
+      model: 'hermes-agent',
+      source: 'mobile',
+      messageCount: 0,
+      isActive: true,
+      preview: '',
+      startedAt: 123,
+      hasGeneratedTitle: true,
+    );
+
+    await cache.saveSessions([session]);
+
+    final restored = SessionCache(prefs, 'connection-a').loadSessions().single;
+    expect(restored.title, 'Chat 2026-07-11 12:00');
+    expect(restored.hasGeneratedTitle, isTrue);
+  });
 }

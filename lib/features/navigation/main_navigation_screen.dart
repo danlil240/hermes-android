@@ -28,6 +28,7 @@ class MainNavigationScreen extends StatefulWidget {
   final bool biometricEnabled;
   final ValueChanged<bool> onToggleBiometric;
   final VoidCallback onSwitchConnection;
+  final VoidCallback onConfigureDashboard;
   final VoidCallback onConnectionChanged;
 
   const MainNavigationScreen({
@@ -38,6 +39,7 @@ class MainNavigationScreen extends StatefulWidget {
     required this.biometricEnabled,
     required this.onToggleBiometric,
     required this.onSwitchConnection,
+    required this.onConfigureDashboard,
     required this.onConnectionChanged,
     super.key,
   });
@@ -63,8 +65,14 @@ class _MainNavigationScreenState extends State<MainNavigationScreen> {
             prefs: widget.prefs,
             onOpenDrawer: () => _scaffoldKey.currentState?.openDrawer(),
           ),
-          _AutomationsTab(connection: widget.connection),
-          _AgentTab(connection: widget.connection),
+          _AutomationsTab(
+            connection: widget.connection,
+            onConfigureDashboard: widget.onConfigureDashboard,
+          ),
+          _AgentTab(
+            connection: widget.connection,
+            onConfigureDashboard: widget.onConfigureDashboard,
+          ),
           _MoreTab(
             connection: widget.connection,
             connManager: widget.connManager,
@@ -87,17 +95,25 @@ class _MainNavigationScreenState extends State<MainNavigationScreen> {
       listenable: ActiveRunsManager.instance,
       builder: (context, _) {
         final active = ActiveRunsManager.instance.activeRuns;
-        final serviceCount =
-            active.where((r) => r.type == ActiveRunType.service).length;
+        final chatCount = active
+            .where(
+              (r) =>
+                  r.type == ActiveRunType.chat ||
+                  r.type == ActiveRunType.question,
+            )
+            .length;
+        final serviceCount = active
+            .where((r) => r.type == ActiveRunType.service)
+            .length;
         final moreCount = active.length;
 
         return NavigationBar(
           selectedIndex: _currentIndex,
           onDestinationSelected: (i) => setState(() => _currentIndex = i),
           destinations: [
-            const NavigationDestination(
-              icon: Icon(Icons.chat_bubble_outline),
-              selectedIcon: Icon(Icons.chat),
+            NavigationDestination(
+              icon: _badgeIcon(Icons.chat_bubble_outline, chatCount),
+              selectedIcon: _badgeIcon(Icons.chat, chatCount),
               label: 'Chats',
             ),
             NavigationDestination(
@@ -123,10 +139,7 @@ class _MainNavigationScreenState extends State<MainNavigationScreen> {
 
   Widget _badgeIcon(IconData icon, int count) {
     if (count == 0) return Icon(icon);
-    return Badge(
-      label: Text('$count'),
-      child: Icon(icon),
-    );
+    return Badge(label: Text('$count'), child: Icon(icon));
   }
 
   // ── Drawer for infrequent controls ──────────────────────────────────
@@ -199,9 +212,8 @@ class _MainNavigationScreenState extends State<MainNavigationScreen> {
                     Navigator.push(
                       context,
                       MaterialPageRoute(
-                        builder: (_) => ActiveRunsScreen(
-                          connection: widget.connection,
-                        ),
+                        builder: (_) =>
+                            ActiveRunsScreen(connection: widget.connection),
                       ),
                     );
                   },
@@ -219,7 +231,11 @@ class _MainNavigationScreenState extends State<MainNavigationScreen> {
 
 class _AutomationsTab extends StatelessWidget {
   final SavedConnection connection;
-  const _AutomationsTab({required this.connection});
+  final VoidCallback onConfigureDashboard;
+  const _AutomationsTab({
+    required this.connection,
+    required this.onConfigureDashboard,
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -228,6 +244,7 @@ class _AutomationsTab extends StatelessWidget {
         title: 'Automations',
         connection: connection,
         features: const ['Cron Jobs', 'Services'],
+        onConfigureDashboard: onConfigureDashboard,
       );
     }
     return Scaffold(
@@ -245,8 +262,7 @@ class _AutomationsTab extends StatelessWidget {
             icon: Icons.build,
             title: 'Services',
             subtitle: 'Background services and integrations',
-            onTap: () =>
-                _push(context, ServicesScreen(connection: connection)),
+            onTap: () => _push(context, ServicesScreen(connection: connection)),
           ),
         ],
       ),
@@ -258,7 +274,11 @@ class _AutomationsTab extends StatelessWidget {
 
 class _AgentTab extends StatelessWidget {
   final SavedConnection connection;
-  const _AgentTab({required this.connection});
+  final VoidCallback onConfigureDashboard;
+  const _AgentTab({
+    required this.connection,
+    required this.onConfigureDashboard,
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -267,6 +287,7 @@ class _AgentTab extends StatelessWidget {
         title: 'Agent',
         connection: connection,
         features: const ['Memory', 'Skills'],
+        onConfigureDashboard: onConfigureDashboard,
       );
     }
     return Scaffold(
@@ -278,15 +299,13 @@ class _AgentTab extends StatelessWidget {
             icon: Icons.memory,
             title: 'Memory',
             subtitle: 'Agent memory and persistent context',
-            onTap: () =>
-                _push(context, MemoryScreen(connection: connection)),
+            onTap: () => _push(context, MemoryScreen(connection: connection)),
           ),
           _FeatureCard(
             icon: Icons.auto_awesome,
             title: 'Skills',
             subtitle: 'Agent capabilities and tools',
-            onTap: () =>
-                _push(context, SkillsScreen(connection: connection)),
+            onTap: () => _push(context, SkillsScreen(connection: connection)),
           ),
         ],
       ),
@@ -326,15 +345,14 @@ class _MoreTab extends StatelessWidget {
             icon: Icons.dns,
             title: 'Diagnostics',
             subtitle: 'System health, logs, and debug info',
-            onTap: () => _push(
-                context, DiagnosticsScreen(connection: connection)),
+            onTap: () =>
+                _push(context, DiagnosticsScreen(connection: connection)),
           ),
           _FeatureCard(
             icon: Icons.settings,
             title: 'Settings',
             subtitle: 'Model selection, theme, and app preferences',
-            onTap: () =>
-                _push(context, SettingsScreen(connection: connection)),
+            onTap: () => _push(context, SettingsScreen(connection: connection)),
           ),
           ListenableBuilder(
             listenable: ActiveRunsManager.instance,
@@ -345,8 +363,8 @@ class _MoreTab extends StatelessWidget {
                 title: 'Active Runs',
                 subtitle: 'Background tasks and pending questions',
                 badge: count,
-                onTap: () => _push(
-                    context, ActiveRunsScreen(connection: connection)),
+                onTap: () =>
+                    _push(context, ActiveRunsScreen(connection: connection)),
               );
             },
           ),
@@ -403,8 +421,7 @@ class _FeatureCard extends StatelessWidget {
         subtitle: Text(subtitle),
         trailing: badge != null && badge! > 0
             ? Container(
-                padding:
-                    const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
                 decoration: BoxDecoration(
                   color: const Color(0xFFD4AF37),
                   borderRadius: BorderRadius.circular(10),
@@ -430,50 +447,135 @@ class _DashboardSetupCard extends StatelessWidget {
   final String title;
   final SavedConnection connection;
   final List<String> features;
+  final VoidCallback onConfigureDashboard;
 
   const _DashboardSetupCard({
     required this.title,
     required this.connection,
     required this.features,
+    required this.onConfigureDashboard,
   });
 
   @override
   Widget build(BuildContext context) {
+    final featureLabel = _joinFeatures(features);
     return Scaffold(
       appBar: AppBar(title: Text(title)),
-      body: Center(
-        child: Padding(
-          padding: const EdgeInsets.all(32),
+      body: ListView(
+        padding: const EdgeInsets.all(24),
+        children: [
+          const SizedBox(height: 24),
+          Icon(Icons.dns_outlined, size: 52, color: Colors.grey[400]),
+          const SizedBox(height: 16),
+          Text(
+            '$title needs dashboard access',
+            textAlign: TextAlign.center,
+            style: Theme.of(context).textTheme.titleLarge,
+          ),
+          const SizedBox(height: 8),
+          Text(
+            'Chat is available through the Gateway API, but $featureLabel '
+            'use the Hermes dashboard API.',
+            textAlign: TextAlign.center,
+            style: Theme.of(
+              context,
+            ).textTheme.bodyMedium?.copyWith(color: Colors.grey[600]),
+          ),
+          const SizedBox(height: 24),
+          Card(
+            child: Padding(
+              padding: const EdgeInsets.all(16),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  _CapabilityRow(
+                    icon: Icons.check_circle,
+                    color: Colors.green,
+                    label: 'Chat',
+                    value: 'Ready via ${connection.host}:${connection.port}',
+                  ),
+                  const Divider(height: 24),
+                  _CapabilityRow(
+                    icon: Icons.radio_button_unchecked,
+                    color: Colors.orange,
+                    label: featureLabel,
+                    value:
+                        'Configure dashboard at ${connection.dashboardHost}:${connection.dashboardPort}',
+                  ),
+                ],
+              ),
+            ),
+          ),
+          const SizedBox(height: 20),
+          FilledButton.icon(
+            onPressed: onConfigureDashboard,
+            icon: const Icon(Icons.settings_ethernet),
+            label: const Text('Open Connection Settings'),
+          ),
+          const SizedBox(height: 8),
+          OutlinedButton.icon(
+            onPressed: () =>
+                _push(context, DiagnosticsScreen(connection: connection)),
+            icon: const Icon(Icons.dns),
+            label: const Text('Run Diagnostics'),
+          ),
+          const SizedBox(height: 12),
+          Text(
+            'From Connection Settings, choose Dashboard / Proxy Settings and '
+            'set dashboard host, port, proxy prefix, or credentials.',
+            textAlign: TextAlign.center,
+            style: Theme.of(
+              context,
+            ).textTheme.bodySmall?.copyWith(color: Colors.grey[600]),
+          ),
+        ],
+      ),
+    );
+  }
+
+  String _joinFeatures(List<String> values) {
+    if (values.isEmpty) return 'these features';
+    if (values.length == 1) return values.first;
+    return '${values.take(values.length - 1).join(', ')} and ${values.last}';
+  }
+}
+
+class _CapabilityRow extends StatelessWidget {
+  final IconData icon;
+  final Color color;
+  final String label;
+  final String value;
+
+  const _CapabilityRow({
+    required this.icon,
+    required this.color,
+    required this.label,
+    required this.value,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Icon(icon, color: color, size: 20),
+        const SizedBox(width: 12),
+        Expanded(
           child: Column(
-            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Icon(Icons.dns_outlined, size: 48, color: Colors.grey[400]),
-              const SizedBox(height: 16),
+              Text(label, style: Theme.of(context).textTheme.titleSmall),
+              const SizedBox(height: 2),
               Text(
-                'Dashboard not configured',
-                style: Theme.of(context).textTheme.titleLarge,
-              ),
-              const SizedBox(height: 8),
-              Text(
-                'To use ${features.join(" and ")}, configure dashboard '
-                'access for this connection.\n\n'
-                'Edit the connection from the connection list to set '
-                'dashboard host, port, and credentials.',
-                textAlign: TextAlign.center,
-                style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                      color: Colors.grey[600],
-                    ),
-              ),
-              const SizedBox(height: 24),
-              FilledButton.icon(
-                onPressed: () => Navigator.pop(context),
-                icon: const Icon(Icons.swap_horiz),
-                label: const Text('Go to Connections'),
+                value,
+                style: Theme.of(
+                  context,
+                ).textTheme.bodySmall?.copyWith(color: Colors.grey[600]),
               ),
             ],
           ),
         ),
-      ),
+      ],
     );
   }
 }

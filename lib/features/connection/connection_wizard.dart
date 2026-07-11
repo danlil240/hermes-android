@@ -2,53 +2,46 @@ import 'package:flutter/material.dart';
 import '../../core/network/connection_manager.dart';
 
 /// The connection type the user picks in Step 1 of the wizard.
-enum _ConnectionType {
-  homeWifi,
-  tailscale,
-  cloudflare,
-  custom,
-}
+enum _ConnectionType { homeWifi, tailscale, cloudflare, custom }
 
 extension _ConnectionTypeX on _ConnectionType {
   String get label => switch (this) {
-        _ConnectionType.homeWifi => 'Home Wi-Fi',
-        _ConnectionType.tailscale => 'Tailscale',
-        _ConnectionType.cloudflare => 'Cloudflare URL',
-        _ConnectionType.custom => 'Custom',
-      };
+    _ConnectionType.homeWifi => 'Home Wi-Fi',
+    _ConnectionType.tailscale => 'Tailscale',
+    _ConnectionType.cloudflare => 'Cloudflare URL',
+    _ConnectionType.custom => 'Custom',
+  };
 
   String get subtitle => switch (this) {
-        _ConnectionType.homeWifi =>
-          'Hermes Gateway on your local network (e.g. 192.168.1.50)',
-        _ConnectionType.tailscale =>
-          'Reach your Gateway anywhere via Tailscale (e.g. 100.x.y.z)',
-        _ConnectionType.cloudflare =>
-          'Public domain with Cloudflare Access (e.g. hermes.example.com)',
-        _ConnectionType.custom =>
-          'Advanced: manually configure every field',
-      };
+    _ConnectionType.homeWifi =>
+      'Hermes Gateway on your local network (e.g. 192.168.1.50)',
+    _ConnectionType.tailscale =>
+      'Reach your Gateway anywhere via Tailscale (e.g. 100.x.y.z)',
+    _ConnectionType.cloudflare =>
+      'Public domain or Cloudflare Tunnel (e.g. hermes.example.com)',
+    _ConnectionType.custom => 'Advanced: manually configure every field',
+  };
 
   IconData get icon => switch (this) {
-        _ConnectionType.homeWifi => Icons.wifi,
-        _ConnectionType.tailscale => Icons.vpn_lock,
-        _ConnectionType.cloudflare => Icons.cloud,
-        _ConnectionType.custom => Icons.settings_ethernet,
-      };
+    _ConnectionType.homeWifi => Icons.wifi,
+    _ConnectionType.tailscale => Icons.vpn_lock,
+    _ConnectionType.cloudflare => Icons.cloud,
+    _ConnectionType.custom => Icons.settings_ethernet,
+  };
 
   String get presetLabel => switch (this) {
-        _ConnectionType.homeWifi => 'Hermes Gateway — local network',
-        _ConnectionType.tailscale => 'Hermes Gateway — Tailscale',
-        _ConnectionType.cloudflare => 'Hermes Gateway — Cloudflare',
-        _ConnectionType.custom => 'Hermes Gateway — custom',
-      };
+    _ConnectionType.homeWifi => 'Hermes Gateway — local network',
+    _ConnectionType.tailscale => 'Hermes Gateway — Tailscale',
+    _ConnectionType.cloudflare => 'Hermes Gateway — Cloudflare',
+    _ConnectionType.custom => 'Hermes Gateway — custom',
+  };
 
   int get defaultPort => switch (this) {
-        _ConnectionType.homeWifi => 8642,
-        _ConnectionType.tailscale => 8642,
-        _ConnectionType.cloudflare => 443,
-        _ConnectionType.custom => 8642,
-      };
-
+    _ConnectionType.homeWifi => 8642,
+    _ConnectionType.tailscale => 8642,
+    _ConnectionType.cloudflare => 443,
+    _ConnectionType.custom => 8642,
+  };
 }
 
 /// A 3-step guided setup wizard that replaces the raw connection form.
@@ -72,7 +65,8 @@ class ConnectionWizard extends StatefulWidget {
     String? dashboardPassword,
     String? cfAccessClientId,
     String? cfAccessClientSecret,
-  }) onSave;
+  })
+  onSave;
 
   const ConnectionWizard({required this.onSave, super.key});
 
@@ -214,7 +208,9 @@ class _ConnectionWizardState extends State<ConnectionWizard> {
     if (parsedPort != null && _port.text != parsedPort.toString()) {
       _port.value = TextEditingValue(
         text: parsedPort.toString(),
-        selection: TextSelection.collapsed(offset: parsedPort.toString().length),
+        selection: TextSelection.collapsed(
+          offset: parsedPort.toString().length,
+        ),
       );
     }
 
@@ -230,10 +226,6 @@ class _ConnectionWizardState extends State<ConnectionWizard> {
       return false;
     }
     if (int.tryParse(_port.text.trim()) == null) return false;
-    if (_selectedType == _ConnectionType.cloudflare) {
-      if (_cfAccessClientId.text.trim().isEmpty) return false;
-      if (_cfAccessClientSecret.text.trim().isEmpty) return false;
-    }
     return true;
   }
 
@@ -376,8 +368,8 @@ class _ConnectionWizardState extends State<ConnectionWizard> {
     final color = isDone
         ? const Color(0xFFD4AF37)
         : isActive
-            ? const Color(0xFFD4AF37)
-            : Colors.grey[600]!;
+        ? const Color(0xFFD4AF37)
+        : Colors.grey[600]!;
 
     return Column(
       mainAxisSize: MainAxisSize.min,
@@ -514,8 +506,8 @@ class _ConnectionWizardState extends State<ConnectionWizard> {
           TextField(
             controller: _cfAccessClientId,
             decoration: const InputDecoration(
-              labelText: 'Cloudflare Access Client ID',
-              hintText: 'Service token Client ID',
+              labelText: 'Cloudflare Access Client ID (optional)',
+              hintText: 'Service token Client ID, if Access is enabled',
             ),
             autocorrect: false,
           ),
@@ -523,8 +515,8 @@ class _ConnectionWizardState extends State<ConnectionWizard> {
           TextField(
             controller: _cfAccessClientSecret,
             decoration: const InputDecoration(
-              labelText: 'Cloudflare Access Client Secret',
-              hintText: 'Service token Client Secret',
+              labelText: 'Cloudflare Access Client Secret (optional)',
+              hintText: 'Service token Client Secret, if Access is enabled',
             ),
             obscureText: true,
             autocorrect: false,
@@ -624,10 +616,10 @@ class _ConnectionWizardState extends State<ConnectionWizard> {
         prefixIcon: type == _ConnectionType.cloudflare
             ? const Icon(Icons.link)
             : type == _ConnectionType.homeWifi
-                ? const Icon(Icons.wifi)
-                : type == _ConnectionType.tailscale
-                    ? const Icon(Icons.vpn_lock)
-                    : const Icon(Icons.dns),
+            ? const Icon(Icons.wifi)
+            : type == _ConnectionType.tailscale
+            ? const Icon(Icons.vpn_lock)
+            : const Icon(Icons.dns),
       ),
       keyboardType: TextInputType.url,
       autocorrect: false,
@@ -660,9 +652,7 @@ class _ConnectionWizardState extends State<ConnectionWizard> {
         value: _dashboardProxied,
         contentPadding: EdgeInsets.zero,
         title: const Text('Dashboard behind proxy'),
-        subtitle: const Text(
-          'Nginx injects auth — app sends clean requests',
-        ),
+        subtitle: const Text('Nginx injects auth — app sends clean requests'),
         onChanged: (v) => setState(() => _dashboardProxied = v),
       ),
       TextField(
@@ -715,7 +705,9 @@ class _ConnectionWizardState extends State<ConnectionWizard> {
         Icon(
           _testResult?.ok == false ? Icons.error_outline : Icons.wifi_find,
           size: 48,
-          color: _testResult?.ok == false ? Colors.red : const Color(0xFFD4AF37),
+          color: _testResult?.ok == false
+              ? Colors.red
+              : const Color(0xFFD4AF37),
         ),
         const SizedBox(height: 16),
         Text(
@@ -751,7 +743,8 @@ class _ConnectionWizardState extends State<ConnectionWizard> {
     final host = _host.text.trim();
     final port = _port.text.trim();
     final type = _selectedType!;
-    final https = type == _ConnectionType.cloudflare ||
+    final https =
+        type == _ConnectionType.cloudflare ||
         host.toLowerCase().startsWith('https://');
 
     return Card(
@@ -846,11 +839,7 @@ class _ConnectionWizardState extends State<ConnectionWizard> {
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
         const SizedBox(height: 32),
-        const Icon(
-          Icons.check_circle,
-          size: 56,
-          color: Color(0xFFD4AF37),
-        ),
+        const Icon(Icons.check_circle, size: 56, color: Color(0xFFD4AF37)),
         const SizedBox(height: 16),
         Text(
           'Chat is ready!',
@@ -992,10 +981,10 @@ class _ConnectionWizardState extends State<ConnectionWizard> {
             FilledButton(
               onPressed: _isStep2Valid
                   ? () => setState(() {
-                        _step = 2;
-                        _testResult = null;
-                        _error = null;
-                      })
+                      _step = 2;
+                      _testResult = null;
+                      _error = null;
+                    })
                   : null,
               child: const Text('Continue'),
             )
@@ -1014,10 +1003,7 @@ class _ConnectionWizardState extends State<ConnectionWizard> {
                   : const Text('Test connection'),
             )
           else if (_step == 2 && _connected && !_showDashboardSetup)
-            FilledButton(
-              onPressed: _saveConnection,
-              child: const Text('Done'),
-            )
+            FilledButton(onPressed: _saveConnection, child: const Text('Done'))
           else if (_step == 2 && _connected && _showDashboardSetup)
             const SizedBox.shrink()
           else
@@ -1066,9 +1052,7 @@ class _ConnectionTypeCard extends StatelessWidget {
               Icon(
                 type.icon,
                 size: 28,
-                color: isSelected
-                    ? const Color(0xFFD4AF37)
-                    : Colors.grey[500],
+                color: isSelected ? const Color(0xFFD4AF37) : Colors.grey[500],
               ),
               const SizedBox(width: 16),
               Expanded(
@@ -1086,10 +1070,7 @@ class _ConnectionTypeCard extends StatelessWidget {
                     const SizedBox(height: 4),
                     Text(
                       type.subtitle,
-                      style: TextStyle(
-                        fontSize: 12,
-                        color: Colors.grey[600],
-                      ),
+                      style: TextStyle(fontSize: 12, color: Colors.grey[600]),
                     ),
                   ],
                 ),

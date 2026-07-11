@@ -358,6 +358,7 @@ void main() {
       expect(s.preview, 'Hello Hermes');
       expect(s.startedAt, 1705000000.0);
       expect(s.endedAt, isNull);
+      expect(s.hasGeneratedTitle, isFalse);
     });
 
     test('fromJson parses an ended session', () {
@@ -380,13 +381,52 @@ void main() {
       final s = Session.fromJson({});
 
       expect(s.id, '');
-      expect(s.title, 'Untitled');
+      expect(s.title, 'New Chat');
       expect(s.model, 'Default');
       expect(s.source, '');
       expect(s.messageCount, 0);
       expect(s.isActive, isTrue);
       expect(s.preview, '');
       expect(s.startedAt, 0.0);
+      expect(s.hasGeneratedTitle, isTrue);
+    });
+
+    test('fromJson derives placeholder titles from previews', () {
+      final s = Session.fromJson({
+        'id': 'sess-3',
+        'title': 'Untitled',
+        'preview': 'User: Restart the Hermes service',
+      });
+
+      expect(s.title, 'Restart the Hermes service');
+      expect(s.hasGeneratedTitle, isTrue);
+    });
+
+    test('fromJson derives placeholder titles from timestamps or ids', () {
+      final dated = Session.fromJson({
+        'id': 'sess-4',
+        'title': '',
+        'started_at': 1705000000.0,
+      });
+      final identified = Session.fromJson({
+        'id': 'session-abcdef123456',
+        'title': 'Untitled Session',
+      });
+
+      expect(dated.title, startsWith('Chat '));
+      expect(dated.hasGeneratedTitle, isTrue);
+      expect(identified.title, 'Session ef123456');
+      expect(identified.hasGeneratedTitle, isTrue);
+    });
+
+    test('identifies generated titles as auto-title candidates', () {
+      final s = Session.fromJson({
+        'id': 'session-abcdef123456',
+        'title': 'Untitled Session',
+      });
+
+      expect(Session.isAutoTitleCandidate(s, s.title), isTrue);
+      expect(Session.isAutoTitleCandidate(s, 'Production incident'), isFalse);
     });
   });
 

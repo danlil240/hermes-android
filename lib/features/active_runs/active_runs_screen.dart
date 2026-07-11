@@ -52,8 +52,7 @@ class _ActiveRunsScreenState extends State<ActiveRunsScreen> {
                 IconButton(
                   icon: const Icon(Icons.cleaning_services_outlined),
                   tooltip: 'Clear finished',
-                  onPressed: () =>
-                      ActiveRunsManager.instance.clearFinished(),
+                  onPressed: () => ActiveRunsManager.instance.clearFinished(),
                 ),
             ],
           ),
@@ -67,11 +66,13 @@ class _ActiveRunsScreenState extends State<ActiveRunsScreen> {
                         count: activeRuns.length,
                         color: const Color(0xFFD4AF37),
                       ),
-                      ...activeRuns.map((r) => _RunCard(
-                            run: r,
-                            connection: widget.connection,
-                            onTap: () => _navigateToRun(r),
-                          )),
+                      ...activeRuns.map(
+                        (r) => _RunCard(
+                          run: r,
+                          connection: widget.connection,
+                          onTap: () => _navigateToRun(r),
+                        ),
+                      ),
                     ],
                     if (finishedRuns.isNotEmpty) ...[
                       const SizedBox(height: 8),
@@ -80,11 +81,13 @@ class _ActiveRunsScreenState extends State<ActiveRunsScreen> {
                         count: finishedRuns.length,
                         color: Colors.grey,
                       ),
-                      ...finishedRuns.map((r) => _RunCard(
-                            run: r,
-                            connection: widget.connection,
-                            onTap: () => _navigateToRun(r),
-                          )),
+                      ...finishedRuns.map(
+                        (r) => _RunCard(
+                          run: r,
+                          connection: widget.connection,
+                          onTap: () => _navigateToRun(r),
+                        ),
+                      ),
                     ],
                   ],
                 ),
@@ -109,9 +112,9 @@ class _ActiveRunsScreenState extends State<ActiveRunsScreen> {
             'Background chat runs, service executions,\n'
             'and pending questions will appear here.',
             textAlign: TextAlign.center,
-            style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                  color: Colors.grey[500],
-                ),
+            style: Theme.of(
+              context,
+            ).textTheme.bodySmall?.copyWith(color: Colors.grey[500]),
           ),
         ],
       ),
@@ -149,10 +152,8 @@ class _ActiveRunsScreenState extends State<ActiveRunsScreen> {
     Navigator.push(
       context,
       MaterialPageRoute(
-        builder: (_) => ChatScreen(
-          connection: widget.connection,
-          session: session,
-        ),
+        builder: (_) =>
+            ChatScreen(connection: widget.connection, session: session),
       ),
     );
   }
@@ -393,11 +394,7 @@ class _RunCard extends StatelessWidget {
                     const SizedBox(height: 4),
                     Row(
                       children: [
-                        Icon(
-                          Icons.dns,
-                          size: 11,
-                          color: Colors.grey[400],
-                        ),
+                        Icon(Icons.dns, size: 11, color: Colors.grey[400]),
                         const SizedBox(width: 4),
                         Text(
                           run.connectionLabel,
@@ -414,9 +411,7 @@ class _RunCard extends StatelessWidget {
                         ),
                         const SizedBox(width: 4),
                         Text(
-                          run.type == ActiveRunType.service
-                              ? 'Service log'
-                              : 'Chat',
+                          _targetLabel(run.type),
                           style: TextStyle(
                             fontSize: 11,
                             color: Colors.grey[400],
@@ -428,10 +423,7 @@ class _RunCard extends StatelessWidget {
                 ),
               ),
               // Right: chevron
-              Icon(
-                Icons.chevron_right,
-                color: Colors.grey[400],
-              ),
+              Icon(Icons.chevron_right, color: Colors.grey[400]),
             ],
           ),
         ),
@@ -470,6 +462,19 @@ class _RunCard extends StatelessWidget {
         return Icons.help_outline;
       case ActiveRunType.reconnecting:
         return Icons.sync;
+    }
+  }
+
+  String _targetLabel(ActiveRunType type) {
+    switch (type) {
+      case ActiveRunType.service:
+        return 'Service log';
+      case ActiveRunType.question:
+        return 'Answer in chat';
+      case ActiveRunType.reconnecting:
+        return 'Connection';
+      case ActiveRunType.chat:
+        return 'Chat';
     }
   }
 }

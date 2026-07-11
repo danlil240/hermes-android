@@ -39,8 +39,7 @@ class ChatScreen extends StatefulWidget {
   State<ChatScreen> createState() => _ChatScreenState();
 }
 
-class _ChatScreenState extends State<ChatScreen>
-    with WidgetsBindingObserver {
+class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
   List<Map<String, dynamic>> _messages = [];
   final List<Map<String, dynamic>> _toolMessages = [];
   bool _loading = true;
@@ -360,6 +359,7 @@ class _ChatScreenState extends State<ChatScreen>
         }
         _loading = false;
       });
+      _maybeAutoTitle();
       final saved = _savedPositions[widget.session.id];
       if (saved != null) {
         WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -411,13 +411,14 @@ class _ChatScreenState extends State<ChatScreen>
       case 'token':
         final token = event.token;
         if (token == null || token.isEmpty) return;
-        if (_currentAction == null || _currentAction == 'Running on Hermes server') {
+        if (_currentAction == null ||
+            _currentAction == 'Running on Hermes server') {
           setState(() => _currentAction = 'Generating response…');
           ActiveRunsManager.instance.updateChatRun(
             sessionId: widget.session.id,
             connectionId: widget.connection.id,
             connectionLabel: widget.connection.label,
-            sessionTitle: widget.session.title,
+            sessionTitle: _currentTitle,
             lastAction: 'Generating response…',
           );
         }
@@ -458,8 +459,7 @@ class _ChatScreenState extends State<ChatScreen>
       }
       // Partial-result recovery for assistant message
       if (_messages.isNotEmpty && _messages.last['role'] == 'assistant') {
-        final assistantContent =
-            _messages.last['content'] as String? ?? '';
+        final assistantContent = _messages.last['content'] as String? ?? '';
         if (assistantContent.isNotEmpty) {
           _messages.last['deliveryState'] = 'incomplete';
           _messages.last['error'] = error;
@@ -524,7 +524,8 @@ class _ChatScreenState extends State<ChatScreen>
       final role = (msg['role'] as String?) ?? '';
       if (role != 'tool') continue;
 
-      final name = (msg['name'] as String?) ??
+      final name =
+          (msg['name'] as String?) ??
           (msg['tool_name'] as String?) ??
           (msg['toolCallName'] as String?) ??
           '';
@@ -634,6 +635,20 @@ class _ChatScreenState extends State<ChatScreen>
     } else {
       _activeQuestions.add(question);
     }
+    if (question.id.isEmpty) return;
+    ActiveRunsManager.instance.updateQuestion(
+      questionId: question.id,
+      sessionId: question.sessionId.isNotEmpty
+          ? question.sessionId
+          : widget.session.id,
+      connectionId: widget.connection.id,
+      connectionLabel: widget.connection.label,
+      sessionTitle: _currentTitle,
+      questionText: question.title.isNotEmpty
+          ? question.title
+          : 'Pending question',
+      resolved: !question.isPending,
+    );
   }
 
   /// Handle a hermes.question SSE event during streaming.
@@ -728,7 +743,7 @@ class _ChatScreenState extends State<ChatScreen>
       sessionId: widget.session.id,
       connectionId: widget.connection.id,
       connectionLabel: widget.connection.label,
-      sessionTitle: widget.session.title,
+      sessionTitle: _currentTitle,
       status: ActiveRunStatus.running,
       lastAction: 'Sending message…',
     );
@@ -751,7 +766,7 @@ class _ChatScreenState extends State<ChatScreen>
         sessionId: widget.session.id,
         connectionId: widget.connection.id,
         connectionLabel: widget.connection.label,
-        sessionTitle: widget.session.title,
+        sessionTitle: _currentTitle,
         status: ActiveRunStatus.running,
         lastAction: 'Running on Hermes server',
       );
@@ -778,7 +793,7 @@ class _ChatScreenState extends State<ChatScreen>
             sessionId: widget.session.id,
             connectionId: widget.connection.id,
             connectionLabel: widget.connection.label,
-            sessionTitle: widget.session.title,
+            sessionTitle: _currentTitle,
             lastAction: 'Generating response…',
           );
         }
@@ -855,8 +870,7 @@ class _ChatScreenState extends State<ChatScreen>
         // incomplete rather than discarding it.
         setState(() {
           if (_messages.isNotEmpty && _messages.last['role'] == 'assistant') {
-            final assistantContent =
-                _messages.last['content'] as String? ?? '';
+            final assistantContent = _messages.last['content'] as String? ?? '';
             if (assistantContent.isNotEmpty) {
               _messages.last['deliveryState'] = 'incomplete';
               _messages.last['error'] = error;
@@ -935,10 +949,7 @@ class _ChatScreenState extends State<ChatScreen>
       }
     });
 
-    _sendMessage(
-      retryText: text,
-      retrySubmissionId: submissionId,
-    );
+    _sendMessage(retryText: text, retrySubmissionId: submissionId);
   }
 
   /// Edit a failed user message. Puts the text back in the composer
@@ -1005,9 +1016,7 @@ class _ChatScreenState extends State<ChatScreen>
       _currentAction = '$emoji $display';
       final idx = toolCallId.isEmpty
           ? -1
-          : _toolMessages.indexWhere(
-              (m) => m['toolCallId'] == toolCallId,
-            );
+          : _toolMessages.indexWhere((m) => m['toolCallId'] == toolCallId);
       final payload = {
         'role': 'tool_progress',
         'content': content,
@@ -1026,7 +1035,7 @@ class _ChatScreenState extends State<ChatScreen>
       sessionId: widget.session.id,
       connectionId: widget.connection.id,
       connectionLabel: widget.connection.label,
-      sessionTitle: widget.session.title,
+      sessionTitle: _currentTitle,
       lastAction: '$emoji $display',
     );
 
@@ -1052,36 +1061,41 @@ class _ChatScreenState extends State<ChatScreen>
       sessionId: widget.session.id,
       connectionId: widget.connection.id,
       connectionLabel: widget.connection.label,
-      sessionTitle: widget.session.title,
+      sessionTitle: _currentTitle,
       status: status,
     );
   }
 
   void _maybeAutoTitle() {
     if (_autoTitled) return;
-    if (_currentTitle != 'New Chat') return;
+    if (!Session.isAutoTitleCandidate(widget.session, _currentTitle)) return;
     final userMsgs = _messages.where((m) => m['role'] == 'user').toList();
     if (userMsgs.isEmpty) return;
     _autoTitled = true;
     final firstContent = (userMsgs.first['content'] as String?) ?? '';
     if (firstContent.isEmpty) return;
     final cleaned = firstContent.replaceAll(RegExp(r'\s+'), ' ').trim();
-    final title = cleaned.length > 50 ? '${cleaned.substring(0, 50)}…' : cleaned;
+    final title = cleaned.length > 50
+        ? '${cleaned.substring(0, 50)}…'
+        : cleaned;
     _currentTitle = title;
     setState(() {});
-    _client.updateSession(widget.session.id, title: title).then((_) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text('Session titled "$title"'),
-          duration: const Duration(seconds: 4),
-          action: SnackBarAction(
-            label: 'Rename',
-            onPressed: () => _showRenameDialog(title),
-          ),
-        ),
-      );
-    }).catchError((_) {});
+    _client
+        .updateSession(widget.session.id, title: title)
+        .then((_) {
+          if (!mounted) return;
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text('Session titled "$title"'),
+              duration: const Duration(seconds: 4),
+              action: SnackBarAction(
+                label: 'Rename',
+                onPressed: () => _showRenameDialog(title),
+              ),
+            ),
+          );
+        })
+        .catchError((_) {});
   }
 
   void _showRenameDialog(String currentTitle) {
@@ -1125,9 +1139,9 @@ class _ChatScreenState extends State<ChatScreen>
       await _client.updateSession(widget.session.id, title: newTitle);
       if (!mounted) return;
       setState(() => _currentTitle = newTitle);
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Session renamed to "$newTitle"')),
-      );
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('Session renamed to "$newTitle"')));
     } catch (e) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
@@ -1141,7 +1155,7 @@ class _ChatScreenState extends State<ChatScreen>
 
   String _exportTranscript() {
     final lines = <String>[];
-    lines.add('# ${widget.session.title}');
+    lines.add('# $_currentTitle');
     lines.add('');
     lines.add('Session ID: ${widget.session.id}');
     lines.add('Model: ${widget.session.model}');
@@ -1165,7 +1179,7 @@ class _ChatScreenState extends State<ChatScreen>
 
   void _shareTranscript() {
     final transcript = _exportTranscript();
-    Share.share(transcript, subject: 'Hermes Chat: ${widget.session.title}');
+    Share.share(transcript, subject: 'Hermes Chat: $_currentTitle');
   }
 
   @override
@@ -1272,11 +1286,7 @@ class _ChatScreenState extends State<ChatScreen>
                 children: [
                   Row(
                     children: [
-                      Icon(
-                        Icons.dns,
-                        size: 11,
-                        color: Colors.grey[500],
-                      ),
+                      Icon(Icons.dns, size: 11, color: Colors.grey[500]),
                       const SizedBox(width: 4),
                       Text(
                         'Running on Hermes server',
@@ -1316,10 +1326,7 @@ class _ChatScreenState extends State<ChatScreen>
             Tooltip(
               message: 'Your work continues on the server even if you leave',
               child: Container(
-                padding: const EdgeInsets.symmetric(
-                  horizontal: 8,
-                  vertical: 4,
-                ),
+                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
                 decoration: BoxDecoration(
                   color: Colors.green.withValues(alpha: 0.1),
                   borderRadius: BorderRadius.circular(10),
@@ -1551,7 +1558,9 @@ class _ChatScreenState extends State<ChatScreen>
     }
 
     // Append pending question cards after messages
-    final pendingQuestions = _activeQuestions.where((q) => q.isPending).toList();
+    final pendingQuestions = _activeQuestions
+        .where((q) => q.isPending)
+        .toList();
     for (final q in pendingQuestions) {
       displayMessages.add(q);
     }
@@ -1571,9 +1580,9 @@ class _ChatScreenState extends State<ChatScreen>
             const SizedBox(height: 8),
             Text(
               'Send a message below to start chatting',
-              style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                    color: Colors.grey[500],
-                  ),
+              style: Theme.of(
+                context,
+              ).textTheme.bodySmall?.copyWith(color: Colors.grey[500]),
             ),
           ],
         ),
@@ -1726,9 +1735,7 @@ class _MessageBubble extends StatelessWidget {
                 await openExternalLink(href);
               }
             },
-            syntaxHighlighter: isUser
-                ? null
-                : CodeHighlighter(isDark: isDark),
+            syntaxHighlighter: isUser ? null : CodeHighlighter(isDark: isDark),
             styleSheet: MarkdownStyleSheet(
               p: (isUser
                   ? theme.textTheme.bodyMedium?.copyWith(color: Colors.white)
@@ -1744,12 +1751,16 @@ class _MessageBubble extends StatelessWidget {
               codeblockDecoration: BoxDecoration(
                 color: isUser
                     ? Colors.white.withValues(alpha: 0.12)
-                    : (isDark ? const Color(0xFF282C34) : const Color(0xFFFAFAFA)),
+                    : (isDark
+                          ? const Color(0xFF282C34)
+                          : const Color(0xFFFAFAFA)),
                 borderRadius: BorderRadius.circular(8),
                 border: Border.all(
                   color: isUser
                       ? Colors.white24
-                      : (isDark ? Colors.white12 : Colors.black.withValues(alpha: 0.08)),
+                      : (isDark
+                            ? Colors.white12
+                            : Colors.black.withValues(alpha: 0.08)),
                 ),
               ),
               codeblockPadding: const EdgeInsets.all(12),
@@ -1826,7 +1837,9 @@ class _MessageBubble extends StatelessWidget {
                 height: 12,
                 child: CircularProgressIndicator(
                   strokeWidth: 1.5,
-                  color: isUser ? Colors.white70 : (isDark ? Colors.white54 : Colors.black54),
+                  color: isUser
+                      ? Colors.white70
+                      : (isDark ? Colors.white54 : Colors.black54),
                 ),
               ),
               const SizedBox(width: 6),
@@ -1834,7 +1847,9 @@ class _MessageBubble extends StatelessWidget {
                 'Sending…',
                 style: TextStyle(
                   fontSize: 11,
-                  color: isUser ? Colors.white70 : (isDark ? Colors.white54 : Colors.black54),
+                  color: isUser
+                      ? Colors.white70
+                      : (isDark ? Colors.white54 : Colors.black54),
                 ),
               ),
             ],
@@ -1876,7 +1891,9 @@ class _MessageBubble extends StatelessWidget {
                   overflow: TextOverflow.ellipsis,
                   style: TextStyle(
                     fontSize: 10,
-                    color: isUser ? Colors.white60 : (isDark ? Colors.white54 : Colors.black54),
+                    color: isUser
+                        ? Colors.white60
+                        : (isDark ? Colors.white54 : Colors.black54),
                   ),
                 ),
               ],
@@ -1932,7 +1949,11 @@ class _MessageBubble extends StatelessWidget {
               children: [
                 Row(
                   children: [
-                    Icon(Icons.warning_amber, size: 14, color: Colors.orange[300]),
+                    Icon(
+                      Icons.warning_amber,
+                      size: 14,
+                      color: Colors.orange[300],
+                    ),
                     const SizedBox(width: 4),
                     Text(
                       'Incomplete — stream disconnected',
@@ -2002,20 +2023,30 @@ class _ActionChip extends StatelessWidget {
         decoration: BoxDecoration(
           color: isUser
               ? Colors.white.withValues(alpha: 0.15)
-              : (isDark ? Colors.white.withValues(alpha: 0.08) : Colors.black.withValues(alpha: 0.06)),
+              : (isDark
+                    ? Colors.white.withValues(alpha: 0.08)
+                    : Colors.black.withValues(alpha: 0.06)),
           borderRadius: BorderRadius.circular(14),
         ),
         child: Row(
           mainAxisSize: MainAxisSize.min,
           children: [
-            Icon(icon, size: 13, color: isUser ? Colors.white70 : (isDark ? Colors.white60 : Colors.black54)),
+            Icon(
+              icon,
+              size: 13,
+              color: isUser
+                  ? Colors.white70
+                  : (isDark ? Colors.white60 : Colors.black54),
+            ),
             const SizedBox(width: 4),
             Text(
               label,
               style: TextStyle(
                 fontSize: 11,
                 fontWeight: FontWeight.w500,
-                color: isUser ? Colors.white70 : (isDark ? Colors.white60 : Colors.black54),
+                color: isUser
+                    ? Colors.white70
+                    : (isDark ? Colors.white60 : Colors.black54),
               ),
             ),
           ],
@@ -2025,15 +2056,11 @@ class _ActionChip extends StatelessWidget {
   }
 }
 
-
 class _ToolProgressCard extends StatelessWidget {
   final List<Map<String, dynamic>> items;
   final bool verbose;
 
-  const _ToolProgressCard({
-    required this.items,
-    this.verbose = false,
-  });
+  const _ToolProgressCard({required this.items, this.verbose = false});
 
   @override
   Widget build(BuildContext context) {
@@ -2049,7 +2076,9 @@ class _ToolProgressCard extends StatelessWidget {
 
     final emojis = items.map((item) {
       final content = (item['content'] as String?) ?? '';
-      return content.isNotEmpty ? content.substring(0, content.length < 2 ? content.length : 2) : '\uD83D\uDD27';
+      return content.isNotEmpty
+          ? content.substring(0, content.length < 2 ? content.length : 2)
+          : '\uD83D\uDD27';
     }).toList();
 
     return Container(
@@ -2069,20 +2098,14 @@ class _ToolProgressCard extends StatelessWidget {
             style: const TextStyle(fontSize: 13),
           ),
           const SizedBox(width: 6),
-          Text(
-            emojis.join(' '),
-            style: const TextStyle(fontSize: 13),
-          ),
+          Text(emojis.join(' '), style: const TextStyle(fontSize: 13)),
           if (active)
             Padding(
               padding: const EdgeInsets.only(left: 8),
               child: SizedBox(
                 width: 12,
                 height: 12,
-                child: CircularProgressIndicator(
-                  strokeWidth: 1.5,
-                  color: fg,
-                ),
+                child: CircularProgressIndicator(strokeWidth: 1.5, color: fg),
               ),
             ),
         ],

@@ -100,6 +100,7 @@ class SessionCache {
         'preview': session.preview,
         'started_at': session.startedAt,
         'ended_at': session.endedAt,
+        'title_generated': session.hasGeneratedTitle,
       };
 
   // ── Pin / Archive (local-only state) ────────────────────────────────

@@ -53,6 +53,7 @@ class _SessionListScreenState extends State<SessionListScreen> {
   // Undo deletion
   Session? _pendingDeleteSession;
   Timer? _pendingDeleteTimer;
+  final Set<String> _titlePersistAttempts = {};
 
   List<String> get _availableModels =>
       _sessions.map((s) => s.model).toSet().toList()..sort();
@@ -244,7 +245,8 @@ class _SessionListScreenState extends State<SessionListScreen> {
       });
       final previousSessions = _cache.loadSessions();
       await _cache.saveSessions(sessions);
-      _prefetchMessages(sessions, previousSessions);
+      unawaited(_persistGeneratedSessionTitles(sessions));
+      unawaited(_prefetchMessages(sessions, previousSessions));
     } catch (e) {
       if (!mounted) return;
       if (_sessions.isNotEmpty) {
@@ -292,6 +294,25 @@ class _SessionListScreenState extends State<SessionListScreen> {
         }
       }),
     );
+  }
+
+  Future<void> _persistGeneratedSessionTitles(List<Session> sessions) async {
+    final candidates = sessions.where(
+      (session) =>
+          session.hasGeneratedTitle &&
+          session.id.isNotEmpty &&
+          session.title.trim().isNotEmpty &&
+          !_titlePersistAttempts.contains(session.id),
+    );
+    for (final session in candidates) {
+      _titlePersistAttempts.add(session.id);
+      try {
+        await _client.updateSession(session.id, title: session.title);
+      } catch (_) {
+        // The local generated title is still useful even if the server rejects
+        // the rename while offline or on older Hermes versions.
+      }
+    }
   }
 
   void _retryWithBackoff() {

@@ -17,11 +17,13 @@ void main() async {
   final connManager = ConnectionManager(prefs, secureStorage);
   await connManager.migrateSecretsToSecureStorage();
   final biometricLock = BiometricLock();
-  runApp(HermesApp(
-    connManager: connManager,
-    biometricLock: biometricLock,
-    prefs: prefs,
-  ));
+  runApp(
+    HermesApp(
+      connManager: connManager,
+      biometricLock: biometricLock,
+      prefs: prefs,
+    ),
+  );
 }
 
 class HermesApp extends StatefulWidget {
@@ -172,9 +174,7 @@ class HermesAppState extends State<HermesApp> {
               biometricEnabled: _biometricEnabled,
               onToggleBiometric: _toggleBiometricLock,
             )
-          : _LockScreen(
-              onRetry: _promptBiometric,
-            ),
+          : _LockScreen(onRetry: _promptBiometric),
     );
   }
 }
@@ -207,9 +207,9 @@ class _LockScreen extends StatelessWidget {
             const SizedBox(height: 12),
             Text(
               'Authenticate with biometrics to continue',
-              style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                    color: Colors.grey[500],
-                  ),
+              style: Theme.of(
+                context,
+              ).textTheme.bodyMedium?.copyWith(color: Colors.grey[500]),
             ),
             const SizedBox(height: 32),
             FilledButton.icon(
@@ -289,8 +289,7 @@ class HomeScreen extends StatefulWidget {
   State<HomeScreen> createState() => _HomeScreenState();
 }
 
-class _HomeScreenState extends State<HomeScreen>
-    with WidgetsBindingObserver {
+class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   List<SavedConnection> _connections = [];
   bool _autoNavigated = false;
   Timer? _backgroundSync;
@@ -338,42 +337,48 @@ class _HomeScreenState extends State<HomeScreen>
 
   Future<void> _syncAllConnections() async {
     final connections = await widget.connManager.getConnectionsWithSecrets();
-    await Future.wait(connections.map((connection) async {
-      final client = ApiClient(
-        baseUrl: connection.baseUrl,
-        apiKey: connection.apiKey,
-        pathPrefix: connection.gatewayPrefix ?? '',
-        cfAccessClientId: connection.cfAccessClientId,
-        cfAccessClientSecret: connection.cfAccessClientSecret,
-      );
-      try {
-        final sessions = await client.getSessions();
-        final cache = SessionCache(widget.connManager.prefs, connection.id);
-        final previousById = {
-          for (final session in cache.loadSessions()) session.id: session,
-        };
-        await cache.saveSessions(sessions);
-        await Future.wait(sessions.where((session) {
-          final previous = previousById[session.id];
-          return cache.loadMessages(session.id).isEmpty ||
-              previous == null ||
-              previous.messageCount != session.messageCount;
-        }).map((session) async {
-          try {
-            await cache.saveMessages(
-              session.id,
-              await client.getMessages(session.id),
-            );
-          } catch (_) {
-            // Keep the last good copy for an individual session.
-          }
-        }));
-      } catch (_) {
-        // Offline connections are retried on the next interval.
-      } finally {
-        client.close();
-      }
-    }));
+    await Future.wait(
+      connections.map((connection) async {
+        final client = ApiClient(
+          baseUrl: connection.baseUrl,
+          apiKey: connection.apiKey,
+          pathPrefix: connection.gatewayPrefix ?? '',
+          cfAccessClientId: connection.cfAccessClientId,
+          cfAccessClientSecret: connection.cfAccessClientSecret,
+        );
+        try {
+          final sessions = await client.getSessions();
+          final cache = SessionCache(widget.connManager.prefs, connection.id);
+          final previousById = {
+            for (final session in cache.loadSessions()) session.id: session,
+          };
+          await cache.saveSessions(sessions);
+          await Future.wait(
+            sessions
+                .where((session) {
+                  final previous = previousById[session.id];
+                  return cache.loadMessages(session.id).isEmpty ||
+                      previous == null ||
+                      previous.messageCount != session.messageCount;
+                })
+                .map((session) async {
+                  try {
+                    await cache.saveMessages(
+                      session.id,
+                      await client.getMessages(session.id),
+                    );
+                  } catch (_) {
+                    // Keep the last good copy for an individual session.
+                  }
+                }),
+          );
+        } catch (_) {
+          // Offline connections are retried on the next interval.
+        } finally {
+          client.close();
+        }
+      }),
+    );
   }
 
   @override
@@ -390,7 +395,7 @@ class _HomeScreenState extends State<HomeScreen>
     final conn = lastId == null
         ? (_connections.length == 1 ? _connections.first : null)
         : (_connections.where((c) => c.id == lastId).firstOrNull ??
-            (_connections.length == 1 ? _connections.first : null));
+              (_connections.length == 1 ? _connections.first : null));
     if (conn == null) return;
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (mounted) _navigateToSessions(conn);
@@ -410,6 +415,12 @@ class _HomeScreenState extends State<HomeScreen>
           biometricEnabled: widget.biometricEnabled,
           onToggleBiometric: widget.onToggleBiometric,
           onSwitchConnection: () => Navigator.pop(context),
+          onConfigureDashboard: () {
+            Navigator.pop(context);
+            WidgetsBinding.instance.addPostFrameCallback((_) {
+              if (mounted) _showDashboardAuthDialog(conn);
+            });
+          },
           onConnectionChanged: _refresh,
         ),
       ),
@@ -422,37 +433,39 @@ class _HomeScreenState extends State<HomeScreen>
       MaterialPageRoute(
         builder: (_) => ConnectionWizard(
           onSave:
-            (
-              label,
-              host,
-              port,
-              apiKey, {
-              gatewayPrefix,
-              dashboardPrefix,
-              dashboardProxied = false,
-              dashboardPort,
-              dashboardHost,
-              dashboardUsername,
-              dashboardPassword,
-              cfAccessClientId,
-              cfAccessClientSecret,
-            }) {
-              widget.connManager.saveConnection(
+              (
                 label,
                 host,
                 port,
-                apiKey,
-                gatewayPrefix: gatewayPrefix,
-                dashboardPrefix: dashboardPrefix,
-                dashboardProxied: dashboardProxied,
-                dashboardPort: dashboardPort,
-                dashboardHost: dashboardHost,
-                dashboardUsername: dashboardUsername,
-                dashboardPassword: dashboardPassword,
-                cfAccessClientId: cfAccessClientId,
-                cfAccessClientSecret: cfAccessClientSecret,
-              ).then((_) => _refresh());
-            },
+                apiKey, {
+                gatewayPrefix,
+                dashboardPrefix,
+                dashboardProxied = false,
+                dashboardPort,
+                dashboardHost,
+                dashboardUsername,
+                dashboardPassword,
+                cfAccessClientId,
+                cfAccessClientSecret,
+              }) {
+                widget.connManager
+                    .saveConnection(
+                      label,
+                      host,
+                      port,
+                      apiKey,
+                      gatewayPrefix: gatewayPrefix,
+                      dashboardPrefix: dashboardPrefix,
+                      dashboardProxied: dashboardProxied,
+                      dashboardPort: dashboardPort,
+                      dashboardHost: dashboardHost,
+                      dashboardUsername: dashboardUsername,
+                      dashboardPassword: dashboardPassword,
+                      cfAccessClientId: cfAccessClientId,
+                      cfAccessClientSecret: cfAccessClientSecret,
+                    )
+                    .then((_) => _refresh());
+              },
         ),
       ),
     );
@@ -601,7 +614,9 @@ class _HomeScreenState extends State<HomeScreen>
     final userCtrl = TextEditingController(text: conn.dashboardUsername ?? '');
     final passCtrl = TextEditingController(text: conn.dashboardPassword ?? '');
     final cfIdCtrl = TextEditingController(text: conn.cfAccessClientId ?? '');
-    final cfSecretCtrl = TextEditingController(text: conn.cfAccessClientSecret ?? '');
+    final cfSecretCtrl = TextEditingController(
+      text: conn.cfAccessClientSecret ?? '',
+    );
     var proxied = conn.dashboardProxied;
     bool validating = false;
     String? error;
@@ -703,7 +718,8 @@ class _HomeScreenState extends State<HomeScreen>
                   controller: dashHostCtrl,
                   decoration: const InputDecoration(
                     labelText: 'Dashboard Host (optional)',
-                    hintText: 'e.g. hermes.example.com (defaults to gateway host)',
+                    hintText:
+                        'e.g. hermes.example.com (defaults to gateway host)',
                   ),
                   autocorrect: false,
                   enabled: !validating,
@@ -795,9 +811,10 @@ class _HomeScreenState extends State<HomeScreen>
                         if (!ctx.mounted) return;
                         if (!result.ok) {
                           setDialogState(() {
-                            error = result.message ??
+                            error =
+                                result.message ??
                                 'Could not reach/authenticate the Gateway API at '
-                                '${conn.host}:${conn.port}$gatewayPrefix.';
+                                    '${conn.host}:${conn.port}$gatewayPrefix.';
                             validating = false;
                           });
                           return;
@@ -879,20 +896,41 @@ class _HomeScreenState extends State<HomeScreen>
   }
 
   Widget _buildConnectionCard(SavedConnection conn) {
+    final dashboardReady = conn.isDashboardConfigured;
     return Card(
       margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
       child: ListTile(
         leading: const Icon(Icons.router, color: Color(0xFFD4AF37)),
         title: Text(conn.label),
-        subtitle: Text(
-          '${conn.host}:${conn.port}${conn.gatewayPrefix != null && conn.gatewayPrefix!.isNotEmpty ? conn.gatewayPrefix! : ''}'
-          '  \u2022  Key: ${conn.apiKey.isNotEmpty ? "\u2713" : "\u2717"}',
-          style: TextStyle(color: Colors.grey[600]),
+        subtitle: Wrap(
+          spacing: 6,
+          runSpacing: 4,
+          crossAxisAlignment: WrapCrossAlignment.center,
+          children: [
+            Text(
+              '${conn.host}:${conn.port}${conn.gatewayPrefix != null && conn.gatewayPrefix!.isNotEmpty ? conn.gatewayPrefix! : ''}',
+              style: TextStyle(color: Colors.grey[600]),
+            ),
+            _ConnectionStatusChip(
+              label: conn.apiKey.isNotEmpty ? 'Chat ready' : 'API key missing',
+              icon: conn.apiKey.isNotEmpty ? Icons.check_circle : Icons.key_off,
+              color: conn.apiKey.isNotEmpty ? Colors.green : Colors.orange,
+            ),
+            _ConnectionStatusChip(
+              label: dashboardReady ? 'Dashboard set' : 'Dashboard not set',
+              icon: dashboardReady
+                  ? Icons.dashboard_customize
+                  : Icons.dashboard_outlined,
+              color: dashboardReady ? Colors.green : Colors.grey,
+            ),
+          ],
         ),
         trailing: PopupMenuButton<String>(
           onSelected: (v) {
             if (v == 'delete') {
-              widget.connManager.deleteConnection(conn.id).then((_) => _refresh());
+              widget.connManager
+                  .deleteConnection(conn.id)
+                  .then((_) => _refresh());
             } else if (v == 'apikey') {
               _showApiKeyDialog(conn);
             } else if (v == 'dashboard') {
@@ -943,15 +981,15 @@ class _HomeScreenState extends State<HomeScreen>
                   child: Row(
                     children: [
                       Icon(
-                        widget.biometricEnabled
-                            ? Icons.lock
-                            : Icons.lock_open,
+                        widget.biometricEnabled ? Icons.lock : Icons.lock_open,
                         size: 20,
                       ),
                       const SizedBox(width: 8),
-                      Text(widget.biometricEnabled
-                          ? 'Disable App Lock'
-                          : 'Enable App Lock'),
+                      Text(
+                        widget.biometricEnabled
+                            ? 'Disable App Lock'
+                            : 'Enable App Lock',
+                      ),
                     ],
                   ),
                 ),
@@ -1007,6 +1045,45 @@ class _HomeScreenState extends State<HomeScreen>
         tooltip: 'Add Connection',
         onPressed: _showAddDialog,
         child: const Icon(Icons.add, color: Colors.black),
+      ),
+    );
+  }
+}
+
+class _ConnectionStatusChip extends StatelessWidget {
+  final String label;
+  final IconData icon;
+  final Color color;
+
+  const _ConnectionStatusChip({
+    required this.label,
+    required this.icon,
+    required this.color,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+      decoration: BoxDecoration(
+        color: color.withValues(alpha: 0.12),
+        borderRadius: BorderRadius.circular(6),
+        border: Border.all(color: color.withValues(alpha: 0.25)),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(icon, size: 12, color: color),
+          const SizedBox(width: 4),
+          Text(
+            label,
+            style: TextStyle(
+              fontSize: 11,
+              fontWeight: FontWeight.w600,
+              color: color,
+            ),
+          ),
+        ],
       ),
     );
   }
