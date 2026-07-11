@@ -1077,7 +1077,7 @@ class _MessageBubble extends StatelessWidget {
           // Message content
           MarkdownBody(
             data: content,
-            onTapLink: (_, href, __) async {
+            onTapLink: (_, href, _) async {
               if (href != null) {
                 await openExternalLink(href);
               }

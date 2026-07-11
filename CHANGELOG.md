@@ -4,6 +4,12 @@ All notable changes to this project are documented here. This project adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html). Release notes for
 versions prior to 1.0.7 are in the **What's new** sections of the [README](README.md).
 
+## [1.0.13]
+
+### Fixed
+- Updated the Flutter 3.44 lint cleanup and test theme setup so release
+  analysis and widget tests pass reliably in CI.
+
 ## [1.0.12]
 
 ### Fixed

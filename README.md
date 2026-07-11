@@ -26,11 +26,15 @@ The app connects to your Hermes server over your home Wi-Fi, a private Tailscale
 
 ## Current release
 
-- Version: **1.0.12**
+- Version: **1.0.13**
 - Package: `com.hermesagent.hermes_android`
 - Recommended APK for most modern phones: `app-arm64-v8a-release.apk`
 - Other APKs: `app-armeabi-v7a-release.apk`, `app-x86_64-release.apk`
 - Download: [GitHub Releases](https://github.com/danlil240/hermes-android/releases/latest)
+
+## What's new in v1.0.13
+
+- **Release reliability** — updated Flutter 3.44 lint and widget-test setup so CI can validate and publish the app successfully.
 
 ## What's new in v1.0.12
 

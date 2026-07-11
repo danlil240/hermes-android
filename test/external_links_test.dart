@@ -26,7 +26,7 @@ void main() {
 
     final opened = await openExternalLink(
       'mailto:daniel@example.com',
-      launcher: (_, __) async {
+      launcher: (_, _) async {
         launcherCalled = true;
         return true;
       },

@@ -6,6 +6,7 @@ import 'package:hermes_android/features/questions/question_widgets.dart';
 void main() {
   Widget wrapWithMaterial(Widget child) {
     return MaterialApp(
+      theme: ThemeData(useMaterial3: false),
       home: Scaffold(body: SingleChildScrollView(child: child)),
     );
   }
