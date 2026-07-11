@@ -4,7 +4,7 @@ All notable changes to this project are documented here. This project adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html). Release notes for
 versions prior to 1.0.7 are in the **What's new** sections of the [README](README.md).
 
-## [Unreleased]
+## [1.0.12]
 
 ### Fixed
 - **Android chat work now survives leaving the app** — each user-initiated
