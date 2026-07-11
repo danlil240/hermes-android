@@ -14,6 +14,7 @@ import '../../core/models/question.dart';
 import '../../core/network/connection_manager.dart';
 import '../questions/question_widgets.dart';
 import '../../shared/responsive.dart';
+import '../../shared/external_links.dart';
 import '../../shared/widgets/code_highlighter.dart';
 
 class ChatScreen extends StatefulWidget {
@@ -1011,6 +1012,11 @@ class _MessageBubble extends StatelessWidget {
           // Message content
           MarkdownBody(
             data: content,
+            onTapLink: (_, href, __) async {
+              if (href != null) {
+                await openExternalLink(href);
+              }
+            },
             syntaxHighlighter: isUser
                 ? null
                 : CodeHighlighter(isDark: isDark),
