@@ -31,6 +31,7 @@ class _ServiceLogViewerState extends State<ServiceLogViewer> {
   String? _resultSummary;
   String? _error;
   bool _done = false;
+  bool _cancelRequested = false;
 
   @override
   void initState() {
@@ -121,12 +122,15 @@ class _ServiceLogViewerState extends State<ServiceLogViewer> {
         _currentStatus == ServiceRunStatus.completed ||
         _currentStatus == ServiceRunStatus.failed ||
         _currentStatus == ServiceRunStatus.cancelled;
+    final isCancellationRequested =
+        _cancelRequested ||
+        _currentStatus == ServiceRunStatus.cancellationRequested;
 
     return Scaffold(
       appBar: AppBar(
         title: Text(widget.run.serviceId),
         actions: [
-          if (!isTerminal)
+          if (!isTerminal && !isCancellationRequested)
             TextButton(
               onPressed: _showCancelConfirm,
               child: const Text('Cancel'),
@@ -138,7 +142,9 @@ class _ServiceLogViewerState extends State<ServiceLogViewer> {
           // Progress steps
           if (_steps.isNotEmpty) _buildStepProgress(),
           // Status bar
-          _buildStatusBar(isTerminal),
+          _buildStatusBar(isTerminal, isCancellationRequested),
+          // Cancellation requested banner
+          if (isCancellationRequested && !isTerminal) _buildCancellationBanner(),
           // Log output
           Expanded(child: _buildLogOutput()),
           // Result summary
@@ -227,13 +233,17 @@ class _ServiceLogViewerState extends State<ServiceLogViewer> {
     );
   }
 
-  Widget _buildStatusBar(bool isTerminal) {
+  Widget _buildStatusBar(bool isTerminal, bool isCancellationRequested) {
     Color statusColor;
     String statusLabel;
     switch (_currentStatus) {
       case ServiceRunStatus.running:
         statusColor = Colors.blue;
         statusLabel = 'Running';
+        break;
+      case ServiceRunStatus.cancellationRequested:
+        statusColor = Colors.deepOrange;
+        statusLabel = 'Cancellation Requested';
         break;
       case ServiceRunStatus.completed:
         statusColor = Colors.green;
@@ -271,16 +281,21 @@ class _ServiceLogViewerState extends State<ServiceLogViewer> {
       child: Row(
         children: [
           if (!isTerminal)
-            const SizedBox(
-              width: 16,
-              height: 16,
-              child: CircularProgressIndicator(strokeWidth: 2),
-            )
+            if (isCancellationRequested)
+              const Icon(Icons.hourglass_top, size: 16, color: Colors.deepOrange)
+            else
+              const SizedBox(
+                width: 16,
+                height: 16,
+                child: CircularProgressIndicator(strokeWidth: 2),
+              )
           else
             Icon(
               _currentStatus == ServiceRunStatus.completed
                   ? Icons.check_circle
-                  : Icons.error,
+                  : _currentStatus == ServiceRunStatus.cancelled
+                      ? Icons.cancel
+                      : Icons.error,
               size: 16,
               color: statusColor,
             ),
@@ -408,6 +423,35 @@ class _ServiceLogViewerState extends State<ServiceLogViewer> {
     );
   }
 
+  Widget _buildCancellationBanner() {
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+      decoration: BoxDecoration(
+        color: Colors.deepOrange.withValues(alpha: 0.1),
+        border: Border(
+          bottom: BorderSide(color: Colors.deepOrange.withValues(alpha: 0.3)),
+        ),
+      ),
+      child: Row(
+        children: [
+          const Icon(Icons.hourglass_top, size: 18, color: Colors.deepOrange),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Text(
+              'Cancellation requested — may take time',
+              style: TextStyle(
+                color: Colors.deepOrange[700],
+                fontWeight: FontWeight.w600,
+                fontSize: 13,
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
   void _showCancelConfirm() {
     showDialog(
       context: context,
@@ -427,6 +471,7 @@ class _ServiceLogViewerState extends State<ServiceLogViewer> {
             style: FilledButton.styleFrom(backgroundColor: Colors.red),
             onPressed: () async {
               Navigator.pop(ctx);
+              setState(() => _cancelRequested = true);
               try {
                 await widget.client.cancelServiceRun(widget.run.runId);
               } catch (_) {

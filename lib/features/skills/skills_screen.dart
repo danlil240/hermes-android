@@ -1,6 +1,8 @@
 // Skills browser — list installed skills with enabled/disabled status.
 import 'package:flutter/material.dart';
 import '../../core/network/connection_manager.dart';
+import '../../shared/errors/hermes_error.dart';
+import '../../shared/widgets/hermes_error_state.dart';
 
 class SkillsScreen extends StatefulWidget {
   final SavedConnection connection;
@@ -14,7 +16,7 @@ class _SkillsScreenState extends State<SkillsScreen> {
   late DashboardClient _client;
   List<Map<String, dynamic>> _skills = [];
   bool _loading = true;
-  String? _error;
+  dynamic _error;
 
   @override
   void initState() {
@@ -54,7 +56,7 @@ class _SkillsScreenState extends State<SkillsScreen> {
     } catch (e) {
       if (!mounted) return;
       setState(() {
-        _error = e.toString();
+        _error = e;
         _loading = false;
       });
     }
@@ -79,29 +81,12 @@ class _SkillsScreenState extends State<SkillsScreen> {
   Widget _buildBody() {
     if (_loading) return const Center(child: CircularProgressIndicator());
     if (_error != null) {
-      return Center(
-        child: Padding(
-          padding: const EdgeInsets.all(32),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              const Icon(Icons.error_outline, size: 48, color: Colors.orange),
-              const SizedBox(height: 16),
-              Text(
-                'Failed to load skills',
-                style: Theme.of(context).textTheme.titleMedium,
-              ),
-              const SizedBox(height: 8),
-              Text(
-                _error!,
-                style: Theme.of(context).textTheme.bodySmall,
-                textAlign: TextAlign.center,
-              ),
-              const SizedBox(height: 24),
-              ElevatedButton(onPressed: _load, child: const Text('Retry')),
-            ],
-          ),
-        ),
+      return HermesErrorState(
+        error: _error,
+        connection: widget.connection,
+        onRetry: _load,
+        source: HermesErrorSource.dashboard,
+        title: 'Failed to load skills',
       );
     }
     if (_skills.isEmpty) {

@@ -4,6 +4,7 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_markdown/flutter_markdown.dart';
 import 'package:flutter_tts/flutter_tts.dart';
 import 'package:share_plus/share_plus.dart';
@@ -12,14 +13,17 @@ import 'package:speech_to_text/speech_recognition_error.dart';
 import 'package:speech_to_text/speech_recognition_result.dart';
 import 'package:speech_to_text/speech_to_text.dart';
 
+import '../../core/active_runs_manager.dart';
 import '../../core/models/question.dart';
 import '../../core/network/connection_manager.dart';
 import '../../core/network/background_chat_service.dart';
 import '../../core/storage/session_cache.dart';
+import '../../shared/errors/error_messages.dart';
 import '../questions/question_widgets.dart';
 import '../../shared/responsive.dart';
 import '../../shared/external_links.dart';
 import '../../shared/widgets/code_highlighter.dart';
+import 'package:uuid/uuid.dart';
 
 class ChatScreen extends StatefulWidget {
   final SavedConnection connection;
@@ -41,6 +45,7 @@ class _ChatScreenState extends State<ChatScreen>
   final List<Map<String, dynamic>> _toolMessages = [];
   bool _loading = true;
   String? _error;
+  bool _offline = false;
   late final ApiClient _client;
   late final GatewayChatClient _gateway;
   SessionCache? _cache;
@@ -50,6 +55,10 @@ class _ChatScreenState extends State<ChatScreen>
   final _textController = TextEditingController();
   bool _sending = false;
   bool _streaming = false;
+
+  // Draft protection: stores the text being sent so it can be restored in the
+  // composer if the submission fails before reaching Hermes.
+  String? _pendingDraft;
 
   // Voice input / spoken replies
   final SpeechToText _speechToText = SpeechToText();
@@ -64,6 +73,10 @@ class _ChatScreenState extends State<ChatScreen>
   // Verbose mode
   bool _verboseMode = false;
 
+  // Current agent action for the activity card
+  String? _currentAction;
+  Timer? _elapsedTimer;
+
   // Active questions for this session (from SSE events or message history)
   final List<Question> _activeQuestions = [];
 
@@ -73,9 +86,13 @@ class _ChatScreenState extends State<ChatScreen>
   double _lastPixels = 0;
   static final Map<String, double> _savedPositions = {};
 
+  String _currentTitle = '';
+  bool _autoTitled = false;
+
   @override
   void initState() {
     super.initState();
+    _currentTitle = widget.session.title;
     WidgetsBinding.instance.addObserver(this);
     _client = ApiClient(
       baseUrl: widget.connection.baseUrl,
@@ -104,6 +121,7 @@ class _ChatScreenState extends State<ChatScreen>
     _savedPositions[widget.session.id] = _lastPixels;
     WidgetsBinding.instance.removeObserver(this);
     _backgroundChatEvents?.cancel();
+    _stopElapsedTimer();
     _speechToText.cancel();
     _flutterTts.stop();
     _client.close();
@@ -299,9 +317,41 @@ class _ChatScreenState extends State<ChatScreen>
       _extractQuestionBlocks(messages);
       await _fetchSessionQuestions();
       if (!mounted) return;
+      // Reconcile delivery states: preserve locally-tracked failed and
+      // incomplete messages that the server doesn't have yet, so the
+      // user can still retry/reconnect after a refresh.
+      final localPending = <Map<String, dynamic>>[];
+      for (final m in _messages) {
+        final state = m['deliveryState'] as String?;
+        if (state == 'failed' || state == 'incomplete') {
+          localPending.add(Map<String, dynamic>.from(m));
+        }
+      }
+      if (localPending.isNotEmpty) {
+        final serverUserContents = messages
+            .where((m) => m['role'] == 'user')
+            .map((m) => (m['content'] as String?) ?? '')
+            .toSet();
+        final serverAssistantContents = messages
+            .where((m) => m['role'] == 'assistant')
+            .map((m) => (m['content'] as String?) ?? '')
+            .toSet();
+        for (final m in localPending) {
+          final content = (m['content'] as String?) ?? '';
+          final role = m['role'] as String? ?? '';
+          if (content.isEmpty) continue;
+          final isInServer = role == 'user'
+              ? serverUserContents.contains(content)
+              : serverAssistantContents.contains(content);
+          if (!isInServer) {
+            messages.add(m);
+          }
+        }
+      }
       setState(() {
         _messages = messages;
         _cache?.saveMessages(widget.session.id, messages);
+        _offline = false;
         if (refreshAfterResume &&
             messages.isNotEmpty &&
             messages.last['role'] == 'assistant') {
@@ -338,10 +388,19 @@ class _ChatScreenState extends State<ChatScreen>
         });
         return;
       }
-      setState(() {
-        _error = errStr;
-        _loading = false;
-      });
+      if (_messages.isNotEmpty) {
+        // We have cached messages — show stale-content banner
+        setState(() {
+          _offline = true;
+          _loading = false;
+          _error = null;
+        });
+      } else {
+        setState(() {
+          _error = errStr;
+          _loading = false;
+        });
+      }
     }
   }
 
@@ -352,6 +411,16 @@ class _ChatScreenState extends State<ChatScreen>
       case 'token':
         final token = event.token;
         if (token == null || token.isEmpty) return;
+        if (_currentAction == null || _currentAction == 'Running on Hermes server') {
+          setState(() => _currentAction = 'Generating response…');
+          ActiveRunsManager.instance.updateChatRun(
+            sessionId: widget.session.id,
+            connectionId: widget.connection.id,
+            connectionLabel: widget.connection.label,
+            sessionTitle: widget.session.title,
+            lastAction: 'Generating response…',
+          );
+        }
         setState(() {
           if (_messages.isNotEmpty && _messages.last['role'] == 'assistant') {
             _messages.last['content'] =
@@ -363,12 +432,65 @@ class _ChatScreenState extends State<ChatScreen>
         _completeBackgroundStream();
         return;
       case 'error':
-        _handleSendError('', event.error ?? 'Background chat failed');
+        _handleBackgroundSendError(event.error ?? 'Background chat failed');
         return;
     }
   }
 
+  /// Handle a background send error by finding the in-flight user message
+  /// by its deliveryState (not text, since we may not have the text here)
+  /// and marking it as failed. Also handles partial-result recovery for
+  /// the assistant placeholder.
+  void _handleBackgroundSendError(String error) {
+    _completeRun(ActiveRunStatus.failed);
+    setState(() {
+      _sending = false;
+      _streaming = false;
+      _awaitingVoiceReply = false;
+      // Find the user message with deliveryState 'sending'
+      for (var i = _messages.length - 1; i >= 0; i--) {
+        final m = _messages[i];
+        if (m['role'] == 'user' && m['deliveryState'] == 'sending') {
+          m['deliveryState'] = 'failed';
+          m['error'] = error;
+          break;
+        }
+      }
+      // Partial-result recovery for assistant message
+      if (_messages.isNotEmpty && _messages.last['role'] == 'assistant') {
+        final assistantContent =
+            _messages.last['content'] as String? ?? '';
+        if (assistantContent.isNotEmpty) {
+          _messages.last['deliveryState'] = 'incomplete';
+          _messages.last['error'] = error;
+        } else {
+          _messages.removeLast();
+        }
+      }
+      // Draft protection: restore text to composer
+      if (_pendingDraft != null) {
+        _textController.text = _pendingDraft!;
+        _textController.selection = TextSelection.collapsed(
+          offset: _textController.text.length,
+        );
+        _pendingDraft = null;
+      }
+    });
+
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Send failed: $error'),
+          backgroundColor: Colors.orange,
+          duration: const Duration(seconds: 6),
+        ),
+      );
+    }
+  }
+
   Future<void> _completeBackgroundStream() async {
+    // Message reached Hermes — clear draft protection.
+    _pendingDraft = null;
     try {
       final messages = await _client.getMessages(widget.session.id);
       if (!mounted) return;
@@ -383,6 +505,8 @@ class _ChatScreenState extends State<ChatScreen>
         _sending = false;
         _showScrollToBottom = false;
       });
+      _completeRun(ActiveRunStatus.completed);
+      _maybeAutoTitle();
       WidgetsBinding.instance.addPostFrameCallback((_) => _scrollToBottom());
     } catch (_) {
       if (!mounted) return;
@@ -390,6 +514,7 @@ class _ChatScreenState extends State<ChatScreen>
         _streaming = false;
         _sending = false;
       });
+      _completeRun(ActiveRunStatus.completed);
     }
   }
 
@@ -540,19 +665,43 @@ class _ChatScreenState extends State<ChatScreen>
     }
   }
 
+  /// Generate a client-side submission ID for idempotent retries.
+  /// The server can use this to deduplicate agent runs when a retry
+  /// sends the same prompt after a network hiccup.
+  String _generateSubmissionId() {
+    return 'sub-${DateTime.now().millisecondsSinceEpoch}-${const Uuid().v4()}';
+  }
+
   /// Send message via SSE streaming (Gateway API Server).
-  Future<void> _sendMessage({bool speakResponse = false}) async {
-    final text = _textController.text.trim();
+  ///
+  /// [retryText] and [retrySubmissionId] are set when retrying a failed
+  /// message — the text and submission ID from the original attempt are
+  /// reused so the server can deduplicate the run.
+  Future<void> _sendMessage({
+    bool speakResponse = false,
+    String? retryText,
+    String? retrySubmissionId,
+  }) async {
+    final text = (retryText ?? _textController.text).trim();
     if (text.isEmpty) return;
     if (_sending || _streaming) return;
 
+    // Draft protection: store the text so it can be restored if the
+    // submission fails before reaching Hermes.
+    if (retryText == null) {
+      _pendingDraft = text;
+    }
     _textController.text = '';
     _awaitingVoiceReply = speakResponse && _voiceReplyEnabled;
 
-    // Build conversation history for SSE request
+    final submissionId = retrySubmissionId ?? _generateSubmissionId();
+
+    // Build conversation history, excluding failed/incomplete messages
     final history = <Map<String, dynamic>>[];
     for (var i = _messages.length - 1; i >= 0; i--) {
       final m = _messages[i];
+      final state = m['deliveryState'] as String?;
+      if (state == 'failed' || state == 'incomplete') continue;
       history.add({'role': m['role'] ?? 'user', 'content': m['content'] ?? ''});
     }
 
@@ -560,10 +709,29 @@ class _ChatScreenState extends State<ChatScreen>
       _sending = true;
       _streaming = true;
       _showScrollToBottom = false;
-      _messages.add({'role': 'user', 'content': text});
-      // Insert a placeholder streaming message
-      _messages.add({'role': 'assistant', 'content': ''});
+      _currentAction = null;
+      _messages.add({
+        'role': 'user',
+        'content': text,
+        'deliveryState': 'sending',
+        'submissionId': submissionId,
+      });
+      _messages.add({
+        'role': 'assistant',
+        'content': '',
+        'deliveryState': 'running',
+      });
     });
+
+    _startElapsedTimer();
+    ActiveRunsManager.instance.updateChatRun(
+      sessionId: widget.session.id,
+      connectionId: widget.connection.id,
+      connectionLabel: widget.connection.label,
+      sessionTitle: widget.session.title,
+      status: ActiveRunStatus.running,
+      lastAction: 'Sending message…',
+    );
 
     WidgetsBinding.instance.addPostFrameCallback((_) => _scrollToBottom());
 
@@ -574,14 +742,28 @@ class _ChatScreenState extends State<ChatScreen>
       message: text,
       sessionId: widget.session.id,
       history: history,
+      submissionId: submissionId,
     );
-    if (startedInBackground) return;
+    if (startedInBackground) {
+      // Message reached Hermes — clear draft protection.
+      _pendingDraft = null;
+      ActiveRunsManager.instance.updateChatRun(
+        sessionId: widget.session.id,
+        connectionId: widget.connection.id,
+        connectionLabel: widget.connection.label,
+        sessionTitle: widget.session.title,
+        status: ActiveRunStatus.running,
+        lastAction: 'Running on Hermes server',
+      );
+      return;
+    }
 
     // Accumulate tokens into the streaming placeholder
     await _gateway.sendMessageStreaming(
       message: text,
       sessionId: widget.session.id,
       history: history,
+      submissionId: submissionId,
       onToken: (token) {
         if (!mounted) return;
         setState(() {
@@ -590,6 +772,16 @@ class _ChatScreenState extends State<ChatScreen>
                 (_messages.last['content'] as String) + token;
           }
         });
+        if (_currentAction == null || _currentAction == 'Sending message…') {
+          setState(() => _currentAction = 'Generating response…');
+          ActiveRunsManager.instance.updateChatRun(
+            sessionId: widget.session.id,
+            connectionId: widget.connection.id,
+            connectionLabel: widget.connection.label,
+            sessionTitle: widget.session.title,
+            lastAction: 'Generating response…',
+          );
+        }
       },
       onToolProgress: (progress) {
         if (!mounted) return;
@@ -600,6 +792,8 @@ class _ChatScreenState extends State<ChatScreen>
       },
       onDone: () async {
         if (!mounted) return;
+        // Message was sent successfully — clear draft protection.
+        _pendingDraft = null;
         // Refresh messages to get the final server-side state
         try {
           final messages = await _client.getMessages(widget.session.id);
@@ -615,6 +809,8 @@ class _ChatScreenState extends State<ChatScreen>
             _sending = false;
             _showScrollToBottom = false;
           });
+          _completeRun(ActiveRunStatus.completed);
+          _maybeAutoTitle();
           if (_awaitingVoiceReply) {
             _awaitingVoiceReply = false;
             final assistant = messages.reversed.firstWhere(
@@ -627,52 +823,80 @@ class _ChatScreenState extends State<ChatScreen>
             }
           }
           final saved = _savedPositions[widget.session.id];
-      if (saved != null) {
-        WidgetsBinding.instance.addPostFrameCallback((_) {
-          if (_scrollController.hasClients) {
-            _scrollController.jumpTo(
-              saved.clamp(0.0, _scrollController.position.maxScrollExtent),
-            );
+          if (saved != null) {
+            WidgetsBinding.instance.addPostFrameCallback((_) {
+              if (_scrollController.hasClients) {
+                _scrollController.jumpTo(
+                  saved.clamp(0.0, _scrollController.position.maxScrollExtent),
+                );
+              }
+            });
+          } else {
+            WidgetsBinding.instance.addPostFrameCallback((_) {
+              if (_scrollController.hasClients) {
+                _scrollController.jumpTo(
+                  _scrollController.position.maxScrollExtent,
+                );
+              }
+            });
           }
-        });
-      } else {
-        WidgetsBinding.instance.addPostFrameCallback((_) {
-          if (_scrollController.hasClients) {
-            _scrollController.jumpTo(
-              _scrollController.position.maxScrollExtent,
-            );
-          }
-        });
-      }
         } catch (e) {
           setState(() {
             _streaming = false;
             _sending = false;
           });
+          _completeRun(ActiveRunStatus.completed);
         }
       },
       onError: (error) {
         if (!mounted) return;
-        // Remove the placeholder assistant message
+        // Partial-result recovery: if the assistant placeholder has
+        // received some tokens before the disconnect, retain it as
+        // incomplete rather than discarding it.
         setState(() {
           if (_messages.isNotEmpty && _messages.last['role'] == 'assistant') {
-            _messages.removeLast();
+            final assistantContent =
+                _messages.last['content'] as String? ?? '';
+            if (assistantContent.isNotEmpty) {
+              _messages.last['deliveryState'] = 'incomplete';
+              _messages.last['error'] = error;
+            } else {
+              _messages.removeLast();
+            }
           }
         });
-        _handleSendError(text, error);
+        _handleSendError(text, error, submissionId: submissionId);
       },
     );
   }
 
-  void _handleSendError(String text, Object e) {
+  void _handleSendError(String text, Object e, {String? submissionId}) {
+    _completeRun(ActiveRunStatus.failed);
     setState(() {
       _sending = false;
       _streaming = false;
       _awaitingVoiceReply = false;
-      if (_messages.isNotEmpty &&
-          _messages.last['role'] == 'user' &&
-          _messages.last['content'] == text) {
-        _messages.removeLast();
+      // Mark the user message as failed instead of removing it, so the
+      // user can see the prompt, the error, and retry/edit/copy it.
+      for (var i = _messages.length - 1; i >= 0; i--) {
+        final m = _messages[i];
+        if (m['role'] == 'user' &&
+            m['content'] == text &&
+            m['deliveryState'] == 'sending') {
+          m['deliveryState'] = 'failed';
+          m['error'] = e.toString();
+          if (submissionId != null) m['submissionId'] = submissionId;
+          break;
+        }
+      }
+      // Draft protection: restore the text in the composer so the user
+      // doesn't lose their input if the message never reached Hermes.
+      if (_pendingDraft != null) {
+        _textController.text = _pendingDraft!;
+        _textController.selection = TextSelection.collapsed(
+          offset: _textController.text.length,
+        );
+        _pendingDraft = null;
       }
     });
 
@@ -684,6 +908,80 @@ class _ChatScreenState extends State<ChatScreen>
           duration: const Duration(seconds: 6),
         ),
       );
+    }
+  }
+
+  /// Retry a failed user message. Removes the failed message and any
+  /// incomplete assistant response after it, then resends with the
+  /// same submission ID so the server can deduplicate the run.
+  void _retryMessage(Map<String, dynamic> failedMsg) {
+    if (failedMsg['deliveryState'] != 'failed') return;
+    final failedIndex = _messages.indexWhere((m) => identical(m, failedMsg));
+    if (failedIndex < 0) return;
+
+    final text = failedMsg['content'] as String? ?? '';
+    final submissionId = failedMsg['submissionId'] as String?;
+
+    // Remove the failed user message and any incomplete assistant
+    // message that follows it.
+    setState(() {
+      _messages.removeAt(failedIndex);
+      if (failedIndex < _messages.length) {
+        final next = _messages[failedIndex];
+        if (next['role'] == 'assistant' &&
+            next['deliveryState'] == 'incomplete') {
+          _messages.removeAt(failedIndex);
+        }
+      }
+    });
+
+    _sendMessage(
+      retryText: text,
+      retrySubmissionId: submissionId,
+    );
+  }
+
+  /// Edit a failed user message. Puts the text back in the composer
+  /// and removes the failed message so the user can edit and resend.
+  void _editMessage(Map<String, dynamic> failedMsg) {
+    if (failedMsg['deliveryState'] != 'failed') return;
+    final failedIndex = _messages.indexWhere((m) => identical(m, failedMsg));
+    if (failedIndex < 0) return;
+
+    final text = failedMsg['content'] as String? ?? '';
+
+    setState(() {
+      _messages.removeAt(failedIndex);
+      if (failedIndex < _messages.length) {
+        final next = _messages[failedIndex];
+        if (next['role'] == 'assistant' &&
+            next['deliveryState'] == 'incomplete') {
+          _messages.removeAt(failedIndex);
+        }
+      }
+      _textController.text = text;
+      _textController.selection = TextSelection.collapsed(
+        offset: _textController.text.length,
+      );
+    });
+  }
+
+  /// Reconnect to the server to fetch the latest state after a stream
+  /// disconnect left a partial (incomplete) assistant response.
+  Future<void> _reconnectStream() async {
+    setState(() {
+      _streaming = true;
+      _sending = true;
+    });
+    try {
+      await _fetchMessages();
+    } finally {
+      if (mounted) {
+        setState(() {
+          _streaming = false;
+          _sending = false;
+        });
+      }
     }
   }
 
@@ -704,6 +1002,7 @@ class _ChatScreenState extends State<ChatScreen>
         : '$emoji $display — $status';
 
     setState(() {
+      _currentAction = '$emoji $display';
       final idx = toolCallId.isEmpty
           ? -1
           : _toolMessages.indexWhere(
@@ -723,7 +1022,121 @@ class _ChatScreenState extends State<ChatScreen>
       }
     });
 
+    ActiveRunsManager.instance.updateChatRun(
+      sessionId: widget.session.id,
+      connectionId: widget.connection.id,
+      connectionLabel: widget.connection.label,
+      sessionTitle: widget.session.title,
+      lastAction: '$emoji $display',
+    );
+
     WidgetsBinding.instance.addPostFrameCallback((_) => _scrollToBottom());
+  }
+
+  void _startElapsedTimer() {
+    _elapsedTimer?.cancel();
+    _elapsedTimer = Timer.periodic(const Duration(seconds: 1), (_) {
+      if (mounted && _streaming) setState(() {});
+    });
+  }
+
+  void _stopElapsedTimer() {
+    _elapsedTimer?.cancel();
+    _elapsedTimer = null;
+  }
+
+  void _completeRun(ActiveRunStatus status) {
+    _stopElapsedTimer();
+    setState(() => _currentAction = null);
+    ActiveRunsManager.instance.updateChatRun(
+      sessionId: widget.session.id,
+      connectionId: widget.connection.id,
+      connectionLabel: widget.connection.label,
+      sessionTitle: widget.session.title,
+      status: status,
+    );
+  }
+
+  void _maybeAutoTitle() {
+    if (_autoTitled) return;
+    if (_currentTitle != 'New Chat') return;
+    final userMsgs = _messages.where((m) => m['role'] == 'user').toList();
+    if (userMsgs.isEmpty) return;
+    _autoTitled = true;
+    final firstContent = (userMsgs.first['content'] as String?) ?? '';
+    if (firstContent.isEmpty) return;
+    final cleaned = firstContent.replaceAll(RegExp(r'\s+'), ' ').trim();
+    final title = cleaned.length > 50 ? '${cleaned.substring(0, 50)}…' : cleaned;
+    _currentTitle = title;
+    setState(() {});
+    _client.updateSession(widget.session.id, title: title).then((_) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Session titled "$title"'),
+          duration: const Duration(seconds: 4),
+          action: SnackBarAction(
+            label: 'Rename',
+            onPressed: () => _showRenameDialog(title),
+          ),
+        ),
+      );
+    }).catchError((_) {});
+  }
+
+  void _showRenameDialog(String currentTitle) {
+    final controller = TextEditingController(text: currentTitle);
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Rename Session'),
+        content: TextField(
+          controller: controller,
+          decoration: const InputDecoration(
+            labelText: 'Session title',
+            border: OutlineInputBorder(),
+          ),
+          autofocus: true,
+          onSubmitted: (value) {
+            Navigator.pop(ctx);
+            _doRename(value.trim());
+          },
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () {
+              Navigator.pop(ctx);
+              _doRename(controller.text.trim());
+            },
+            child: const Text('Save'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Future<void> _doRename(String newTitle) async {
+    if (newTitle.isEmpty) return;
+    try {
+      await _client.updateSession(widget.session.id, title: newTitle);
+      if (!mounted) return;
+      setState(() => _currentTitle = newTitle);
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Session renamed to "$newTitle"')),
+      );
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Failed to rename: ${ErrorMessages.format(e)}'),
+          backgroundColor: Colors.red,
+        ),
+      );
+    }
   }
 
   String _exportTranscript() {
@@ -760,24 +1173,23 @@ class _ChatScreenState extends State<ChatScreen>
     return Scaffold(
       appBar: AppBar(
         title: Text(
-          widget.session.title,
+          _currentTitle,
           maxLines: 1,
           overflow: TextOverflow.ellipsis,
         ),
         actions: [
-          if (_streaming)
+          if (_offline)
             const Padding(
               padding: EdgeInsets.only(right: 8),
-              child: Row(
-                children: [
-                  SizedBox(
-                    width: 20,
-                    height: 20,
-                    child: CircularProgressIndicator(strokeWidth: 2),
-                  ),
-                  SizedBox(width: 8),
-                  Text('Responding…', style: TextStyle(fontSize: 13)),
-                ],
+              child: Icon(Icons.cloud_off, color: Colors.orange, size: 20),
+            ),
+          if (_streaming)
+            const Padding(
+              padding: EdgeInsets.only(right: 12),
+              child: SizedBox(
+                width: 20,
+                height: 20,
+                child: CircularProgressIndicator(strokeWidth: 2),
               ),
             )
           else ...[
@@ -801,6 +1213,8 @@ class _ChatScreenState extends State<ChatScreen>
           ),
           child: Column(
             children: [
+              if (_offline) _buildOfflineBanner(),
+              if (_streaming) _buildAgentActivityCard(),
               Expanded(child: _buildBody()),
               _buildInputBar(),
             ],
@@ -814,6 +1228,129 @@ class _ChatScreenState extends State<ChatScreen>
               child: const Icon(Icons.keyboard_arrow_down),
             )
           : null,
+    );
+  }
+
+  Widget _buildAgentActivityCard() {
+    final theme = Theme.of(context);
+    final isDark = theme.brightness == Brightness.dark;
+    final run = ActiveRunsManager.instance.chatRunFor(
+      widget.connection.id,
+      widget.session.id,
+    );
+    final elapsed = run?.elapsedLabel ?? '0s';
+    final action = _currentAction ?? 'Running on Hermes server';
+
+    return Material(
+      color: isDark ? const Color(0xFF1A1A1A) : const Color(0xFFF5F5F5),
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+        decoration: BoxDecoration(
+          border: Border(
+            bottom: BorderSide(
+              color: const Color(0xFFD4AF37).withValues(alpha: 0.2),
+            ),
+          ),
+        ),
+        child: Row(
+          children: [
+            // Pulsing server icon
+            const SizedBox(
+              width: 20,
+              height: 20,
+              child: CircularProgressIndicator(
+                strokeWidth: 2,
+                color: Color(0xFFD4AF37),
+              ),
+            ),
+            const SizedBox(width: 12),
+            // Center: server + current action
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Row(
+                    children: [
+                      Icon(
+                        Icons.dns,
+                        size: 11,
+                        color: Colors.grey[500],
+                      ),
+                      const SizedBox(width: 4),
+                      Text(
+                        'Running on Hermes server',
+                        style: TextStyle(
+                          fontSize: 11,
+                          color: Colors.grey[500],
+                          fontWeight: FontWeight.w500,
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+                      Text(
+                        elapsed,
+                        style: TextStyle(
+                          fontSize: 11,
+                          color: Colors.grey[400],
+                          fontFamily: 'monospace',
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 2),
+                  Text(
+                    action,
+                    style: TextStyle(
+                      fontSize: 13,
+                      color: isDark ? Colors.white : Colors.black87,
+                      fontWeight: FontWeight.w500,
+                    ),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(width: 8),
+            // "Leave safely" reassurance chip
+            Tooltip(
+              message: 'Your work continues on the server even if you leave',
+              child: Container(
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 8,
+                  vertical: 4,
+                ),
+                decoration: BoxDecoration(
+                  color: Colors.green.withValues(alpha: 0.1),
+                  borderRadius: BorderRadius.circular(10),
+                  border: Border.all(
+                    color: Colors.green.withValues(alpha: 0.3),
+                  ),
+                ),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Icon(
+                      Icons.check_circle_outline,
+                      size: 12,
+                      color: Colors.green.withValues(alpha: 0.8),
+                    ),
+                    const SizedBox(width: 4),
+                    Text(
+                      'Safe to leave',
+                      style: TextStyle(
+                        fontSize: 10,
+                        color: Colors.green.withValues(alpha: 0.9),
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
     );
   }
 
@@ -833,7 +1370,9 @@ class _ChatScreenState extends State<ChatScreen>
               child: TextField(
                 controller: _textController,
                 decoration: InputDecoration(
-                  hintText: 'Type a message…',
+                  hintText: _offline
+                      ? 'Offline — sending unavailable'
+                      : 'Type a message…',
                   border: OutlineInputBorder(
                     borderRadius: BorderRadius.circular(24),
                   ),
@@ -848,7 +1387,7 @@ class _ChatScreenState extends State<ChatScreen>
                 textCapitalization: TextCapitalization.sentences,
                 keyboardType: TextInputType.multiline,
                 textInputAction: TextInputAction.send,
-                enabled: !_loading && !_streaming,
+                enabled: !_loading && !_streaming && !_offline,
                 onSubmitted: (_) => _sendMessage(),
               ),
             ),
@@ -856,7 +1395,7 @@ class _ChatScreenState extends State<ChatScreen>
             IconButton.filledTonal(
               icon: Icon(_listening ? Icons.mic_off : Icons.mic),
               color: _listening ? Theme.of(context).colorScheme.error : null,
-              onPressed: (!_loading && !_streaming && !_sending)
+              onPressed: (!_loading && !_streaming && !_sending && !_offline)
                   ? _toggleVoiceInput
                   : null,
               tooltip: _listening ? 'Stop listening' : 'Speak to Hermes',
@@ -885,7 +1424,7 @@ class _ChatScreenState extends State<ChatScreen>
                     )
                   : IconButton(
                       icon: const Icon(Icons.send, size: 20),
-                      onPressed: _sendMessage,
+                      onPressed: _offline ? null : _sendMessage,
                       tooltip: 'Send',
                     ),
             ),
@@ -893,6 +1432,49 @@ class _ChatScreenState extends State<ChatScreen>
         ),
       ),
     );
+  }
+
+  Widget _buildOfflineBanner() {
+    final syncedAt = _cache?.messagesSyncedAt(widget.session.id);
+    final syncLabel = syncedAt != null
+        ? 'showing messages synced ${_formatRelativeTime(syncedAt)}'
+        : 'showing cached messages';
+    return Material(
+      color: const Color(0xFF2D2D2D),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+        child: Row(
+          children: [
+            const Icon(Icons.cloud_off, color: Colors.orange, size: 20),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Text(
+                'Offline — $syncLabel',
+                style: const TextStyle(
+                  color: Colors.orange,
+                  fontSize: 13,
+                  fontWeight: FontWeight.w500,
+                ),
+              ),
+            ),
+            IconButton(
+              icon: const Icon(Icons.refresh, color: Colors.orange, size: 18),
+              tooltip: 'Retry',
+              onPressed: _fetchMessages,
+              visualDensity: VisualDensity.compact,
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  String _formatRelativeTime(DateTime dt) {
+    final diff = DateTime.now().difference(dt);
+    if (diff.inMinutes < 1) return 'just now';
+    if (diff.inMinutes < 60) return '${diff.inMinutes}m ago';
+    if (diff.inHours < 24) return '${diff.inHours}h ago';
+    return '${diff.inDays}d ago';
   }
 
   Widget _buildBody() {
@@ -946,7 +1528,11 @@ class _ChatScreenState extends State<ChatScreen>
       }
       if (role != 'user' && role != 'assistant') continue;
       final content = (msg['content'] as String?) ?? '';
-      if (content.isEmpty) continue;
+      final deliveryState = msg['deliveryState'] as String?;
+      // Skip empty messages that don't have a delivery state (e.g. the
+      // initial assistant placeholder before any tokens arrive is
+      // still shown via 'running' state).
+      if (content.isEmpty && deliveryState == null) continue;
 
       if (currentGroup.isNotEmpty) {
         displayMessages.add(currentGroup.toList());
@@ -1017,12 +1603,22 @@ class _ChatScreenState extends State<ChatScreen>
         final role = (msg['role'] as String?) ?? 'assistant';
         final content = (msg['content'] as String?) ?? '';
         final isUser = role == 'user';
+        final deliveryState = msg['deliveryState'] as String?;
 
         return _MessageBubble(
           content: content,
           isUser: isUser,
           verbose: _verboseMode,
           metadata: msg,
+          onRetry: isUser && deliveryState == 'failed'
+              ? () => _retryMessage(msg)
+              : null,
+          onEdit: isUser && deliveryState == 'failed'
+              ? () => _editMessage(msg)
+              : null,
+          onReconnect: !isUser && deliveryState == 'incomplete'
+              ? () => _reconnectStream()
+              : null,
         );
       },
     );
@@ -1034,12 +1630,18 @@ class _MessageBubble extends StatelessWidget {
   final bool isUser;
   final bool verbose;
   final Map<String, dynamic> metadata;
+  final VoidCallback? onRetry;
+  final VoidCallback? onEdit;
+  final VoidCallback? onReconnect;
 
   const _MessageBubble({
     required this.content,
     required this.isUser,
     this.verbose = false,
     this.metadata = const {},
+    this.onRetry,
+    this.onEdit,
+    this.onReconnect,
   });
 
   @override
@@ -1193,6 +1795,8 @@ class _MessageBubble extends StatelessWidget {
                     ),
             ),
           ),
+          // Delivery state UI
+          ..._buildDeliveryStateWidgets(theme, isDark),
         ],
       ),
     );
@@ -1203,6 +1807,220 @@ class _MessageBubble extends StatelessWidget {
           : MainAxisAlignment.start,
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [bubble],
+    );
+  }
+
+  List<Widget> _buildDeliveryStateWidgets(ThemeData theme, bool isDark) {
+    final deliveryState = metadata['deliveryState'] as String?;
+    if (deliveryState == null) return const [];
+
+    switch (deliveryState) {
+      case 'sending':
+        return [
+          const SizedBox(height: 6),
+          Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              SizedBox(
+                width: 12,
+                height: 12,
+                child: CircularProgressIndicator(
+                  strokeWidth: 1.5,
+                  color: isUser ? Colors.white70 : (isDark ? Colors.white54 : Colors.black54),
+                ),
+              ),
+              const SizedBox(width: 6),
+              Text(
+                'Sending…',
+                style: TextStyle(
+                  fontSize: 11,
+                  color: isUser ? Colors.white70 : (isDark ? Colors.white54 : Colors.black54),
+                ),
+              ),
+            ],
+          ),
+        ];
+
+      case 'failed':
+        final error = metadata['error']?.toString() ?? 'Unknown error';
+        return [
+          const SizedBox(height: 8),
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+            decoration: BoxDecoration(
+              color: Colors.red.withValues(alpha: isUser ? 0.2 : 0.1),
+              borderRadius: BorderRadius.circular(8),
+            ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Row(
+                  children: [
+                    Icon(Icons.error_outline, size: 14, color: Colors.red[300]),
+                    const SizedBox(width: 4),
+                    Text(
+                      'Failed to send',
+                      style: TextStyle(
+                        fontSize: 11,
+                        fontWeight: FontWeight.w600,
+                        color: Colors.red[300],
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 2),
+                Text(
+                  error,
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                    fontSize: 10,
+                    color: isUser ? Colors.white60 : (isDark ? Colors.white54 : Colors.black54),
+                  ),
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(height: 6),
+          Wrap(
+            spacing: 6,
+            runSpacing: 4,
+            children: [
+              if (onRetry != null)
+                _ActionChip(
+                  label: 'Retry',
+                  icon: Icons.refresh,
+                  onTap: onRetry!,
+                  isUser: isUser,
+                  isDark: isDark,
+                ),
+              if (onEdit != null)
+                _ActionChip(
+                  label: 'Edit',
+                  icon: Icons.edit_outlined,
+                  onTap: onEdit!,
+                  isUser: isUser,
+                  isDark: isDark,
+                ),
+              _ActionChip(
+                label: 'Copy',
+                icon: Icons.copy_outlined,
+                onTap: () {
+                  Clipboard.setData(ClipboardData(text: content));
+                },
+                isUser: isUser,
+                isDark: isDark,
+              ),
+            ],
+          ),
+        ];
+
+      case 'incomplete':
+        final error = metadata['error']?.toString();
+        return [
+          const SizedBox(height: 8),
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+            decoration: BoxDecoration(
+              color: Colors.orange.withValues(alpha: 0.1),
+              borderRadius: BorderRadius.circular(8),
+            ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Row(
+                  children: [
+                    Icon(Icons.warning_amber, size: 14, color: Colors.orange[300]),
+                    const SizedBox(width: 4),
+                    Text(
+                      'Incomplete — stream disconnected',
+                      style: TextStyle(
+                        fontSize: 11,
+                        fontWeight: FontWeight.w600,
+                        color: Colors.orange[300],
+                      ),
+                    ),
+                  ],
+                ),
+                if (error != null) ...[
+                  const SizedBox(height: 2),
+                  Text(
+                    error,
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(
+                      fontSize: 10,
+                      color: isDark ? Colors.white54 : Colors.black54,
+                    ),
+                  ),
+                ],
+              ],
+            ),
+          ),
+          if (onReconnect != null) ...[
+            const SizedBox(height: 6),
+            _ActionChip(
+              label: 'Reconnect',
+              icon: Icons.cloud_sync_outlined,
+              onTap: onReconnect!,
+              isUser: isUser,
+              isDark: isDark,
+            ),
+          ],
+        ];
+
+      default:
+        return const [];
+    }
+  }
+}
+
+class _ActionChip extends StatelessWidget {
+  final String label;
+  final IconData icon;
+  final VoidCallback onTap;
+  final bool isUser;
+  final bool isDark;
+
+  const _ActionChip({
+    required this.label,
+    required this.icon,
+    required this.onTap,
+    required this.isUser,
+    required this.isDark,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return InkWell(
+      onTap: onTap,
+      borderRadius: BorderRadius.circular(14),
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+        decoration: BoxDecoration(
+          color: isUser
+              ? Colors.white.withValues(alpha: 0.15)
+              : (isDark ? Colors.white.withValues(alpha: 0.08) : Colors.black.withValues(alpha: 0.06)),
+          borderRadius: BorderRadius.circular(14),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(icon, size: 13, color: isUser ? Colors.white70 : (isDark ? Colors.white60 : Colors.black54)),
+            const SizedBox(width: 4),
+            Text(
+              label,
+              style: TextStyle(
+                fontSize: 11,
+                fontWeight: FontWeight.w500,
+                color: isUser ? Colors.white70 : (isDark ? Colors.white60 : Colors.black54),
+              ),
+            ),
+          ],
+        ),
+      ),
     );
   }
 }

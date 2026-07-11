@@ -6,7 +6,8 @@ import 'core/auth/biometric_lock.dart';
 import 'core/network/connection_manager.dart';
 import 'core/storage/secure_storage.dart';
 import 'core/storage/session_cache.dart';
-import 'features/sessions/session_list_screen.dart';
+import 'features/connection/connection_wizard.dart';
+import 'features/navigation/main_navigation_screen.dart';
 import 'shared/responsive.dart';
 
 void main() async {
@@ -401,19 +402,26 @@ class _HomeScreenState extends State<HomeScreen>
     Navigator.push(
       context,
       MaterialPageRoute(
-        builder: (_) => SessionListScreen(
+        builder: (_) => MainNavigationScreen(
           connection: conn,
           prefs: widget.connManager.prefs,
+          connManager: widget.connManager,
+          biometricAvailable: widget.biometricAvailable,
+          biometricEnabled: widget.biometricEnabled,
+          onToggleBiometric: widget.onToggleBiometric,
+          onSwitchConnection: () => Navigator.pop(context),
+          onConnectionChanged: _refresh,
         ),
       ),
     );
   }
 
   void _showAddDialog() {
-    showDialog(
-      context: context,
-      builder: (_) => _AddDialog(
-        onSave:
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (_) => ConnectionWizard(
+          onSave:
             (
               label,
               host,
@@ -445,6 +453,7 @@ class _HomeScreenState extends State<HomeScreen>
                 cfAccessClientSecret: cfAccessClientSecret,
               ).then((_) => _refresh());
             },
+        ),
       ),
     );
   }
@@ -1000,408 +1009,5 @@ class _HomeScreenState extends State<HomeScreen>
         child: const Icon(Icons.add, color: Colors.black),
       ),
     );
-  }
-}
-
-class _AddDialog extends StatefulWidget {
-  final void Function(
-    String label,
-    String host,
-    int port,
-    String apiKey, {
-    String? gatewayPrefix,
-    String? dashboardPrefix,
-    bool dashboardProxied,
-    int? dashboardPort,
-    String? dashboardHost,
-    String? dashboardUsername,
-    String? dashboardPassword,
-    String? cfAccessClientId,
-    String? cfAccessClientSecret,
-  })
-  onSave;
-  const _AddDialog({required this.onSave});
-
-  @override
-  State<_AddDialog> createState() => _AddDialogState();
-}
-
-class _AddDialogState extends State<_AddDialog> {
-  final _label = TextEditingController(text: 'Home');
-  final _host = TextEditingController();
-  final _port = TextEditingController(text: '8642');
-  final _apiKey = TextEditingController();
-  final _gatewayPrefix = TextEditingController();
-  final _dashboardPrefix = TextEditingController();
-  final _dashPort = TextEditingController();
-  final _dashHost = TextEditingController();
-  final _dashUser = TextEditingController();
-  final _dashPass = TextEditingController();
-  final _cfAccessClientId = TextEditingController();
-  final _cfAccessClientSecret = TextEditingController();
-  bool _showDashboard = false;
-  bool _dashboardProxied = false;
-  bool _validating = false;
-  String? _error;
-
-  Future<void> _validateAndSave() async {
-    final label = _label.text.trim();
-    final host = _host.text.trim();
-    final port = int.tryParse(_port.text.trim()) ?? 8642;
-    final apiKey = _apiKey.text.trim();
-    final gatewayPrefix = _gatewayPrefix.text.trim();
-    final dashboardPrefix = _dashboardPrefix.text.trim();
-
-    if (label.isEmpty || host.isEmpty || port <= 0) return;
-
-    setState(() {
-      _validating = true;
-      _error = null;
-    });
-
-    try {
-      final normalized = SavedConnection.normalizeHostAndPort(host, port);
-      final baseUrl = SavedConnection(
-        id: '',
-        label: '',
-        host: normalized.host,
-        port: normalized.port,
-        apiKey: '',
-        useHttps: normalized.useHttps,
-      ).baseUrl;
-      final client = ApiClient(
-        baseUrl: baseUrl,
-        apiKey: apiKey,
-        pathPrefix: gatewayPrefix,
-        cfAccessClientId: _cfAccessClientId.text.trim().isEmpty
-            ? null
-            : _cfAccessClientId.text.trim(),
-        cfAccessClientSecret: _cfAccessClientSecret.text.trim().isEmpty
-            ? null
-            : _cfAccessClientSecret.text.trim(),
-      );
-      final result = await client.healthCheckDetail();
-      client.close();
-
-      if (!mounted) return;
-
-      if (!result.ok) {
-        setState(() {
-          _error = result.message ?? 'Validation failed.';
-          _validating = false;
-        });
-        return;
-      }
-
-      final dashPortText = _dashPort.text.trim();
-      final dashHostText = _dashHost.text.trim();
-      final dashUser = _dashUser.text.trim();
-      final dashPass = _dashPass.text.trim();
-      final dashPort = dashPortText.isEmpty ? null : int.tryParse(dashPortText);
-      final dashHost = dashHostText.isEmpty ? null : dashHostText;
-
-      // If the user supplied any dashboard details, validate them before saving
-      // (parity with the Dashboard Login dialog). The gateway is already known
-      // good at this point.
-      if (dashPortText.isNotEmpty ||
-          dashHostText.isNotEmpty ||
-          dashUser.isNotEmpty ||
-          dashPass.isNotEmpty ||
-          dashboardPrefix.isNotEmpty ||
-          _dashboardProxied) {
-        final dashHostForValidation = dashHost ?? normalized.host;
-        final dashClient = DashboardClient(
-          host: dashHostForValidation,
-          port: SavedConnection(
-            id: '',
-            label: '',
-            host: normalized.host,
-            port: normalized.port,
-            apiKey: '',
-            useHttps: normalized.useHttps,
-            dashboardPortOverride: dashPort,
-          ).dashboardPort,
-          useHttps: normalized.useHttps,
-          pathPrefix: dashboardPrefix,
-          proxied: _dashboardProxied,
-          username: dashUser.isEmpty ? null : dashUser,
-          password: dashPass.isEmpty ? null : dashPass,
-          cfAccessClientId: _cfAccessClientId.text.trim().isEmpty
-              ? null
-              : _cfAccessClientId.text.trim(),
-          cfAccessClientSecret: _cfAccessClientSecret.text.trim().isEmpty
-              ? null
-              : _cfAccessClientSecret.text.trim(),
-        );
-        try {
-          await dashClient.getModelInfo();
-        } catch (_) {
-          dashClient.close();
-          if (!mounted) return;
-          setState(() {
-            _error =
-                'Gateway connected, but the dashboard could not be reached or '
-                'authenticated. Check the dashboard details, or clear them to skip.';
-            _validating = false;
-            _showDashboard = true;
-          });
-          return;
-        }
-        dashClient.close();
-        if (!mounted) return;
-      }
-
-      widget.onSave(
-        label,
-        host,
-        port,
-        apiKey,
-        gatewayPrefix: gatewayPrefix.isEmpty ? null : gatewayPrefix,
-        dashboardPrefix: dashboardPrefix.isEmpty ? null : dashboardPrefix,
-        dashboardProxied: _dashboardProxied,
-        dashboardPort: dashPort,
-        dashboardHost: dashHost,
-        dashboardUsername: dashUser.isEmpty ? null : dashUser,
-        dashboardPassword: dashPass.isEmpty ? null : dashPass,
-        cfAccessClientId: _cfAccessClientId.text.trim().isEmpty
-            ? null
-            : _cfAccessClientId.text.trim(),
-        cfAccessClientSecret: _cfAccessClientSecret.text.trim().isEmpty
-            ? null
-            : _cfAccessClientSecret.text.trim(),
-      );
-      Navigator.pop(context);
-    } catch (e) {
-      if (!mounted) return;
-      setState(() {
-        _error = 'Cannot reach $host:$port. Check the host and port.';
-        _validating = false;
-      });
-    }
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return AlertDialog(
-      title: const Text('Add Gateway Connection'),
-      content: SingleChildScrollView(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            if (_error != null) ...[
-              Container(
-                width: double.infinity,
-                padding: const EdgeInsets.all(10),
-                margin: const EdgeInsets.only(bottom: 12),
-                decoration: BoxDecoration(
-                  color: Colors.red.withValues(alpha: 0.1),
-                  borderRadius: BorderRadius.circular(8),
-                  border: Border.all(color: Colors.red.withValues(alpha: 0.3)),
-                ),
-                child: Row(
-                  children: [
-                    const Icon(
-                      Icons.error_outline,
-                      color: Colors.red,
-                      size: 18,
-                    ),
-                    const SizedBox(width: 8),
-                    Expanded(
-                      child: Text(
-                        _error!,
-                        style: const TextStyle(color: Colors.red, fontSize: 13),
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-            ],
-            TextField(
-              controller: _label,
-              decoration: const InputDecoration(labelText: 'Label'),
-            ),
-            const SizedBox(height: 12),
-            TextField(
-              controller: _host,
-              decoration: const InputDecoration(
-                labelText: 'Host',
-                hintText:
-                    '192.168.1.50, 100.x.y.z, or hermes-machine.tailnet.ts.net',
-              ),
-              keyboardType: TextInputType.text,
-              autocorrect: false,
-            ),
-            const SizedBox(height: 12),
-            TextField(
-              controller: _port,
-              decoration: const InputDecoration(
-                labelText: 'Port',
-                hintText: '8642 (API Server)',
-              ),
-              keyboardType: TextInputType.number,
-            ),
-            const SizedBox(height: 12),
-            TextField(
-              controller: _apiKey,
-              decoration: const InputDecoration(
-                labelText: 'API Key',
-                hintText: 'API_SERVER_KEY from ~/.hermes/.env',
-              ),
-              obscureText: true,
-            ),
-            const SizedBox(height: 12),
-            TextField(
-              controller: _cfAccessClientId,
-              decoration: const InputDecoration(
-                labelText: 'CF Access Client ID (optional)',
-                hintText: 'Cloudflare Access service token Client ID',
-              ),
-              autocorrect: false,
-            ),
-            const SizedBox(height: 12),
-            TextField(
-              controller: _cfAccessClientSecret,
-              decoration: const InputDecoration(
-                labelText: 'CF Access Client Secret (optional)',
-                hintText: 'Cloudflare Access service token Client Secret',
-              ),
-              obscureText: true,
-              autocorrect: false,
-            ),
-            const SizedBox(height: 4),
-            InkWell(
-              onTap: _validating
-                  ? null
-                  : () => setState(() => _showDashboard = !_showDashboard),
-              child: Padding(
-                padding: const EdgeInsets.symmetric(vertical: 8),
-                child: Row(
-                  children: [
-                    Icon(
-                      _showDashboard ? Icons.expand_less : Icons.expand_more,
-                      size: 20,
-                      color: Colors.grey[500],
-                    ),
-                    const SizedBox(width: 4),
-                    Text(
-                      'Custom proxy and dashboard details',
-                      style: TextStyle(color: Colors.grey[500], fontSize: 13),
-                    ),
-                  ],
-                ),
-              ),
-            ),
-            if (_showDashboard) ...[
-              const SizedBox(height: 8),
-              TextField(
-                controller: _gatewayPrefix,
-                decoration: const InputDecoration(
-                  labelText: 'Gateway path prefix',
-                  hintText:
-                      'e.g. /profile/peter (proxy path before /api/ and /v1/)',
-                ),
-                autocorrect: false,
-              ),
-              const SizedBox(height: 12),
-              TextField(
-                controller: _dashboardPrefix,
-                decoration: const InputDecoration(
-                  labelText: 'Dashboard path prefix',
-                  hintText: 'e.g. /dashboard (proxy path before /api/)',
-                ),
-                autocorrect: false,
-              ),
-              const SizedBox(height: 8),
-              SwitchListTile(
-                value: _dashboardProxied,
-                contentPadding: EdgeInsets.zero,
-                title: const Text('Dashboard behind proxy'),
-                subtitle: const Text(
-                  'Nginx injects auth — app sends clean requests',
-                ),
-                onChanged: (v) => setState(() => _dashboardProxied = v),
-              ),
-              Padding(
-                padding: const EdgeInsets.only(bottom: 4),
-                child: Text(
-                  'Optional. For the Memory/Cron/Skills/Settings tabs. Leave '
-                  'blank to use the default dashboard port (9119) with no login.',
-                  style: TextStyle(color: Colors.grey[600], fontSize: 12),
-                ),
-              ),
-              TextField(
-                controller: _dashPort,
-                decoration: const InputDecoration(
-                  labelText: 'Dashboard Port',
-                  hintText: 'Leave blank for default (9119)',
-                ),
-                keyboardType: TextInputType.number,
-              ),
-              const SizedBox(height: 12),
-              TextField(
-                controller: _dashHost,
-                decoration: const InputDecoration(
-                  labelText: 'Dashboard Host (optional)',
-                  hintText: 'e.g. hermes.example.com (defaults to gateway host)',
-                ),
-                autocorrect: false,
-              ),
-              const SizedBox(height: 12),
-              TextField(
-                controller: _dashUser,
-                decoration: const InputDecoration(
-                  labelText: 'Dashboard Username (optional)',
-                ),
-                autocorrect: false,
-              ),
-              const SizedBox(height: 12),
-              TextField(
-                controller: _dashPass,
-                decoration: const InputDecoration(
-                  labelText: 'Dashboard Password (optional)',
-                ),
-                obscureText: true,
-              ),
-            ],
-          ],
-        ),
-      ),
-      actions: [
-        TextButton(
-          onPressed: _validating ? null : () => Navigator.pop(context),
-          child: const Text('Cancel'),
-        ),
-        FilledButton(
-          onPressed: _validating ? null : _validateAndSave,
-          child: _validating
-              ? const SizedBox(
-                  width: 18,
-                  height: 18,
-                  child: CircularProgressIndicator(
-                    strokeWidth: 2,
-                    color: Colors.white,
-                  ),
-                )
-              : const Text('Connect'),
-        ),
-      ],
-    );
-  }
-
-  @override
-  void dispose() {
-    _label.dispose();
-    _host.dispose();
-    _port.dispose();
-    _apiKey.dispose();
-    _gatewayPrefix.dispose();
-    _dashboardPrefix.dispose();
-    _dashPort.dispose();
-    _dashHost.dispose();
-    _dashUser.dispose();
-    _dashPass.dispose();
-    _cfAccessClientId.dispose();
-    _cfAccessClientSecret.dispose();
-    super.dispose();
   }
 }

@@ -3,6 +3,8 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
 import '../../core/network/connection_manager.dart';
+import '../../shared/errors/hermes_error.dart';
+import '../../shared/widgets/hermes_error_state.dart';
 
 class DiagnosticsScreen extends StatefulWidget {
   final SavedConnection connection;
@@ -17,7 +19,7 @@ class _DiagnosticsScreenState extends State<DiagnosticsScreen> {
   Map<String, dynamic>? _statusData;
   bool _healthOk = false;
   bool _loading = true;
-  String? _error;
+  dynamic _error;
   DateTime? _lastChecked;
   Timer? _autoRefresh;
 
@@ -66,7 +68,7 @@ class _DiagnosticsScreenState extends State<DiagnosticsScreen> {
     } catch (e) {
       if (!mounted) return;
       setState(() {
-        _error = e.toString();
+        _error = e;
         _loading = false;
       });
     }
@@ -120,29 +122,11 @@ class _DiagnosticsScreenState extends State<DiagnosticsScreen> {
     if (_loading) return const Center(child: CircularProgressIndicator());
 
     if (_error != null) {
-      return Center(
-        child: Padding(
-          padding: const EdgeInsets.all(32),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              const Icon(Icons.error_outline, size: 48, color: Colors.orange),
-              const SizedBox(height: 16),
-              Text(
-                'Connection issue',
-                style: Theme.of(context).textTheme.titleMedium,
-              ),
-              const SizedBox(height: 8),
-              Text(
-                _error!,
-                style: Theme.of(context).textTheme.bodySmall,
-                textAlign: TextAlign.center,
-              ),
-              const SizedBox(height: 24),
-              ElevatedButton(onPressed: _load, child: const Text('Retry')),
-            ],
-          ),
-        ),
+      return HermesErrorState(
+        error: _error,
+        connection: widget.connection,
+        onRetry: _load,
+        source: HermesErrorSource.api,
       );
     }
 

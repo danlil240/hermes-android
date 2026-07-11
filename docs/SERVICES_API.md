@@ -49,13 +49,32 @@ command:
   value: restart hermes
 timeout_seconds: 60
 audit: true
+
+# ── Operational metadata (optional, consumed by the operations console UI) ──
+systems_affected:          # list of systems/components impacted
+  - hermes-backend
+  - hermes-agent
+expected_duration: "~30s"  # human-readable estimate
+risk_explanation: >
+  Restarting Hermes interrupts all active chat sessions and
+  in-flight tool calls. Sessions resume after restart.
+prerequisites: "No active long-running tasks should be in progress."
+recovery_guidance: >
+  If the service fails to restart, check systemd logs with
+  `journalctl -u hermes -n 50` and attempt a manual restart.
+verification_service_id: check_status   # service to run for post-execution verification
 ```
 
 ## Service run lifecycle
 
 ```text
-requested → (waiting_for_confirmation) → running → completed | failed | cancelled | timeout
+requested → (waiting_for_confirmation) → running → cancellation_requested → cancelled | completed | failed | timeout
 ```
+
+When a cancel request is received while running, the backend transitions the
+run to `cancellation_requested` and emits an SSE status event. The run then
+moves to `cancelled` once cleanup is complete (or to `completed`/`failed` if
+the service finishes before the cancellation takes effect).
 
 Result shape:
 
@@ -64,6 +83,8 @@ Result shape:
   "run_id": "run_123",
   "service_id": "restart_hermes",
   "status": "completed",
+  # Status can be: pending | awaiting_confirmation | running |
+  #   cancellation_requested | completed | failed | cancelled
   "started_at": "2026-07-07T20:00:00Z",
   "completed_at": "2026-07-07T20:00:12Z",
   "summary": "Hermes restarted successfully.",

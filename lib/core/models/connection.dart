@@ -80,6 +80,18 @@ class SavedConnection {
   /// override is set.
   String get dashboardHost => dashboardHostOverride ?? host;
 
+  /// Whether any dashboard-specific settings have been configured.
+  /// When false, dashboard features (Memory, Cron, Skills, Services, Settings)
+  /// may not be reachable and a setup card is shown instead.
+  bool get isDashboardConfigured =>
+      (dashboardUsername != null && dashboardUsername!.isNotEmpty) ||
+      (dashboardPassword != null && dashboardPassword!.isNotEmpty) ||
+      dashboardProxied ||
+      (cfAccessClientId != null && cfAccessClientId!.isNotEmpty) ||
+      (dashboardHostOverride != null && dashboardHostOverride!.isNotEmpty) ||
+      dashboardPortOverride != null ||
+      (dashboardPrefix != null && dashboardPrefix!.isNotEmpty);
+
   /// Joins a base URL with an optional path prefix, normalising slashes.
   static String joinBaseUrl(String baseUrl, String pathPrefix) {
     var url = baseUrl.endsWith('/')

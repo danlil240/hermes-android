@@ -4,6 +4,8 @@ import 'package:flutter_tts/flutter_tts.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../../core/network/connection_manager.dart';
 import '../../main.dart';
+import '../../shared/errors/hermes_error.dart';
+import '../../shared/widgets/hermes_error_state.dart';
 import 'package:package_info_plus/package_info_plus.dart';
 
 class SettingsScreen extends StatefulWidget {
@@ -19,7 +21,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
   Map<String, dynamic>? _modelInfo;
   Map<String, dynamic>? _modelOptions;
   bool _loading = true;
-  String? _error;
+  dynamic _error;
   String? _successMsg;
 
   // Selected values
@@ -71,7 +73,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
       });
     } catch (e) {
       setState(() {
-        _error = e.toString();
+        _error = e;
         _loading = false;
       });
     }
@@ -131,7 +133,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
       });
     } catch (e) {
       setState(() {
-        _error = e.toString();
+        _error = e;
       });
     }
   }
@@ -159,29 +161,12 @@ class _SettingsScreenState extends State<SettingsScreen> {
     }
 
     if (_error != null && _modelOptions == null) {
-      return Center(
-        child: Padding(
-          padding: const EdgeInsets.all(32),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              const Icon(Icons.error_outline, size: 48, color: Colors.orange),
-              const SizedBox(height: 16),
-              Text(
-                'Failed to load settings',
-                style: Theme.of(context).textTheme.titleMedium,
-              ),
-              const SizedBox(height: 8),
-              Text(
-                _error!,
-                style: Theme.of(context).textTheme.bodySmall,
-                textAlign: TextAlign.center,
-              ),
-              const SizedBox(height: 24),
-              ElevatedButton(onPressed: _loadData, child: const Text('Retry')),
-            ],
-          ),
-        ),
+      return HermesErrorState(
+        error: _error,
+        connection: widget.connection,
+        onRetry: _loadData,
+        source: HermesErrorSource.dashboard,
+        title: 'Failed to load settings',
       );
     }
 

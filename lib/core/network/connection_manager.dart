@@ -671,7 +671,6 @@ class ApiClient {
         apiKey: _apiKey,
         cfAccessClientId: _cfAccessClientId,
         cfAccessClientSecret: _cfAccessClientSecret,
-        httpClient: _http,
       ),
       runId,
       onProgress: onProgress,
@@ -861,10 +860,15 @@ class GatewayChatClient {
     required String sessionId,
     String? model,
     List<Map<String, dynamic>>? history,
+    String? submissionId,
   }) {
+    final headers = Map<String, String>.from(_api._headers);
+    if (submissionId != null) {
+      headers['X-Hermes-Submission-Id'] = submissionId;
+    }
     return BackgroundChatService.start(
       endpoint: '$_baseUrl/v1/runs',
-      headers: _api._headers,
+      headers: headers,
       body: jsonEncode({
         'model': model ?? 'hermes-agent',
         'input': message,
@@ -881,6 +885,7 @@ class GatewayChatClient {
     required String sessionId,
     String? model,
     List<Map<String, dynamic>>? history,
+    String? submissionId,
     required void Function(String token) onToken,
     ToolProgressCallback? onToolProgress,
     QuestionCallback? onQuestion,
@@ -899,6 +904,9 @@ class GatewayChatClient {
     };
 
     final headers = {..._api._headers, 'X-Hermes-Session-Id': sessionId};
+    if (submissionId != null) {
+      headers['X-Hermes-Submission-Id'] = submissionId;
+    }
 
     final streamClient = _streamClientFactory();
     _activeStreamClient = streamClient;
@@ -1236,6 +1244,52 @@ class DashboardClient {
     return _decodeMapResponse(res);
   }
 
+  // ── Services ─────────────────────────────────────────────────────────
+
+  Future<List<Map<String, dynamic>>> getServices() async {
+    final data = await apiGetList('services');
+    return data.whereType<Map<String, dynamic>>().toList();
+  }
+
+  Future<Map<String, dynamic>> runService(String serviceId) =>
+      apiPost('services/$serviceId/run');
+
+  Future<Map<String, dynamic>> getServiceRun(String runId) =>
+      apiGet('service-runs/$runId');
+
+  Future<Map<String, dynamic>> confirmServiceRun(String runId) =>
+      apiPost('service-runs/$runId/confirm');
+
+  Future<Map<String, dynamic>> cancelServiceRun(String runId) =>
+      apiPost('service-runs/$runId/cancel');
+
+  Future<List<Map<String, dynamic>>> getServiceRuns({
+    int limit = 50,
+    int offset = 0,
+  }) async {
+    final data = await apiGetList('service-runs?limit=$limit&offset=$offset');
+    return data.whereType<Map<String, dynamic>>().toList();
+  }
+
+  // ── Service run SSE log streaming ────────────────────────────────────
+
+  /// Stream real-time logs and progress for a service run via Server-Sent
+  /// Events. Uses dashboard session-cookie auth.
+  DashboardServiceRunStreamController streamServiceRunLogs(
+    String runId, {
+    required void Function(ServiceRunProgress progress) onProgress,
+    required void Function() onDone,
+    required void Function(String error) onError,
+  }) {
+    return DashboardServiceRunStreamController(
+      this,
+      runId,
+      onProgress: onProgress,
+      onDone: onDone,
+      onError: onError,
+    );
+  }
+
   Future<Map<String, dynamic>> getModelInfo() => apiGet('model/info');
   Future<Map<String, dynamic>> getModelOptions() => apiGet('model/options');
   Future<List<Map<String, dynamic>>> getSkills() async {
@@ -1417,5 +1471,121 @@ class ServiceRunStreamController {
     _cancelled = true;
     _subscription?.cancel();
     _client.close();
+  }
+}
+
+/// SSE stream controller for service run logs using [DashboardClient] auth.
+///
+/// Same SSE parsing as [ServiceRunStreamController] but authenticates via
+/// dashboard session cookies (or SPA token / proxied mode) instead of a
+/// Bearer API key.
+class DashboardServiceRunStreamController {
+  final DashboardClient _client;
+  final String _runId;
+  final void Function(ServiceRunProgress progress) _onProgress;
+  final void Function() _onDone;
+  final void Function(String error) _onError;
+  http.StreamedResponse? _response;
+  StreamSubscription? _subscription;
+  bool _cancelled = false;
+
+  DashboardServiceRunStreamController(
+    this._client,
+    this._runId, {
+    required void Function(ServiceRunProgress progress) onProgress,
+    required void Function() onDone,
+    required void Function(String error) onError,
+  })  : _onProgress = onProgress,
+        _onDone = onDone,
+        _onError = onError {
+    _connect();
+  }
+
+  Future<void> _connect() async {
+    if (_cancelled) return;
+    try {
+      final authHeaders = await _client._authHeaders();
+      final request = http.Request(
+        'GET',
+        Uri.parse('${_client._baseUrl}/api/service-runs/$_runId/logs'),
+      );
+      request.headers.addAll({
+        ...authHeaders,
+        'Accept': 'text/event-stream',
+      });
+
+      _response = await _client._http.send(request);
+
+      if (_response!.statusCode == 401 && !_cancelled) {
+        _client._resetAuth();
+        _response = null;
+        _connect();
+        return;
+      }
+
+      if (_response!.statusCode != 200) {
+        final errorBody = await _response!.stream.bytesToString();
+        if (!_cancelled) _onError('HTTP ${_response!.statusCode}: $errorBody');
+        return;
+      }
+
+      String buffer = '';
+      _subscription = _response!.stream.transform(utf8.decoder).listen(
+        (chunk) {
+          buffer += chunk;
+          while (buffer.contains('\n\n')) {
+            final eventEnd = buffer.indexOf('\n\n');
+            final frame = buffer.substring(0, eventEnd);
+            buffer = buffer.substring(eventEnd + 2);
+            _parseSseFrame(frame);
+          }
+        },
+        onDone: () {
+          if (!_cancelled) _onDone();
+        },
+        onError: (e) {
+          if (!_cancelled) _onError(e.toString());
+        },
+      );
+    } catch (e) {
+      if (!_cancelled) _onError(e.toString());
+    }
+  }
+
+  void _parseSseFrame(String frame) {
+    String eventType = '';
+    final dataLines = <String>[];
+
+    for (final rawLine in frame.split('\n')) {
+      final line = rawLine.trimRight();
+      if (line.isEmpty || line.startsWith(':')) continue;
+      if (line.startsWith('event:')) {
+        eventType = line.substring(6).trim();
+      } else if (line.startsWith('data:')) {
+        dataLines.add(line.substring(5).trimLeft());
+      }
+    }
+
+    if (dataLines.isEmpty) return;
+    final data = dataLines.join('\n').trim();
+    if (data.isEmpty || data == '[DONE]') return;
+
+    try {
+      final parsed = jsonDecode(data);
+      if (parsed is Map<String, dynamic>) {
+        final progress = ServiceRunProgress.fromSseEvent(eventType, parsed);
+        _onProgress(progress);
+        if (progress.isDone) {
+          _cancelled = true;
+          _subscription?.cancel();
+          _onDone();
+        }
+      }
+    } catch (_) {}
+  }
+
+  void cancel() {
+    _cancelled = true;
+    _subscription?.cancel();
   }
 }

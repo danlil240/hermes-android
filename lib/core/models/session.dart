@@ -22,6 +22,30 @@ class Session {
     this.endedAt,
   });
 
+  Session copyWith({
+    String? id,
+    String? title,
+    String? model,
+    String? source,
+    int? messageCount,
+    bool? isActive,
+    String? preview,
+    double? startedAt,
+    double? endedAt,
+  }) {
+    return Session(
+      id: id ?? this.id,
+      title: title ?? this.title,
+      model: model ?? this.model,
+      source: source ?? this.source,
+      messageCount: messageCount ?? this.messageCount,
+      isActive: isActive ?? this.isActive,
+      preview: preview ?? this.preview,
+      startedAt: startedAt ?? this.startedAt,
+      endedAt: endedAt ?? this.endedAt,
+    );
+  }
+
   factory Session.fromJson(Map<String, dynamic> json) {
     final endedAt = json['ended_at'];
     return Session(

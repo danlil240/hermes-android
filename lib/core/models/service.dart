@@ -8,6 +8,7 @@ enum ServiceRunStatus {
   pending,
   awaitingConfirmation,
   running,
+  cancellationRequested,
   completed,
   failed,
   cancelled,
@@ -24,6 +25,14 @@ class ServiceDefinition {
   final bool requiresConfirmation;
   final int? timeoutSeconds;
 
+  // ── Operational metadata (from backend manifest) ──
+  final List<String> systemsAffected;
+  final String? expectedDuration;
+  final String? riskExplanation;
+  final String? prerequisites;
+  final String? recoveryGuidance;
+  final String? verificationServiceId;
+
   const ServiceDefinition({
     required this.id,
     required this.name,
@@ -32,6 +41,12 @@ class ServiceDefinition {
     this.riskLevel = ServiceRiskLevel.unknown,
     this.requiresConfirmation = false,
     this.timeoutSeconds,
+    this.systemsAffected = const [],
+    this.expectedDuration,
+    this.riskExplanation,
+    this.prerequisites,
+    this.recoveryGuidance,
+    this.verificationServiceId,
   });
 
   factory ServiceDefinition.fromJson(Map<String, dynamic> json) {
@@ -54,6 +69,14 @@ class ServiceDefinition {
         risk = ServiceRiskLevel.unknown;
     }
 
+    final systemsAffected = <String>[];
+    final sa = json['systems_affected'];
+    if (sa is List) {
+      systemsAffected.addAll(sa.map((e) => e.toString()));
+    } else if (sa is String) {
+      systemsAffected.add(sa);
+    }
+
     return ServiceDefinition(
       id: json['id']?.toString() ?? '',
       name: json['name']?.toString() ?? '',
@@ -62,6 +85,12 @@ class ServiceDefinition {
       riskLevel: risk,
       requiresConfirmation: json['requires_confirmation'] as bool? ?? false,
       timeoutSeconds: json['timeout_seconds'] as int?,
+      systemsAffected: systemsAffected,
+      expectedDuration: json['expected_duration']?.toString(),
+      riskExplanation: json['risk_explanation']?.toString(),
+      prerequisites: json['prerequisites']?.toString(),
+      recoveryGuidance: json['recovery_guidance']?.toString(),
+      verificationServiceId: json['verification_service_id']?.toString(),
     );
   }
 
@@ -124,6 +153,9 @@ class ServiceRun {
       case 'failed':
         status = ServiceRunStatus.failed;
         break;
+      case 'cancellation_requested':
+        status = ServiceRunStatus.cancellationRequested;
+        break;
       case 'cancelled':
         status = ServiceRunStatus.cancelled;
         break;
@@ -177,6 +209,8 @@ class ServiceRun {
   bool get isFailed => status == ServiceRunStatus.failed;
   bool get isAwaitingConfirmation =>
       status == ServiceRunStatus.awaitingConfirmation;
+  bool get isCancellationRequested =>
+      status == ServiceRunStatus.cancellationRequested;
   bool get isCancelled => status == ServiceRunStatus.cancelled;
   bool get isDone =>
       isCompleted || isFailed || isCancelled;
@@ -262,6 +296,8 @@ class ServiceRunProgress {
           return ServiceRunStatus.completed;
         case 'failed':
           return ServiceRunStatus.failed;
+        case 'cancellation_requested':
+          return ServiceRunStatus.cancellationRequested;
         case 'cancelled':
           return ServiceRunStatus.cancelled;
         default:
@@ -289,4 +325,7 @@ class ServiceRunProgress {
       status == ServiceRunStatus.completed ||
       status == ServiceRunStatus.failed ||
       status == ServiceRunStatus.cancelled;
+
+  bool get isCancellationRequested =>
+      status == ServiceRunStatus.cancellationRequested;
 }

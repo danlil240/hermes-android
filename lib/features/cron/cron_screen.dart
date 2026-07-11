@@ -8,6 +8,11 @@
 import 'package:flutter/material.dart';
 
 import '../../core/network/connection_manager.dart';
+import '../../shared/errors/error_messages.dart';
+import '../../shared/errors/hermes_error.dart';
+import '../../shared/widgets/hermes_error_state.dart';
+import 'cron_validator.dart';
+import 'schedule_builder_page.dart';
 
 class CronScreen extends StatefulWidget {
   final SavedConnection connection;
@@ -21,7 +26,7 @@ class _CronScreenState extends State<CronScreen> {
   late DashboardClient _client;
   List<Map<String, dynamic>> _jobs = [];
   bool _loading = true;
-  String? _error;
+  dynamic _error;
 
   @override
   void initState() {
@@ -67,7 +72,7 @@ class _CronScreenState extends State<CronScreen> {
     } catch (e) {
       if (!mounted) return;
       setState(() {
-        _error = e.toString();
+        _error = e;
         _loading = false;
       });
     }
@@ -128,7 +133,7 @@ class _CronScreenState extends State<CronScreen> {
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Failed: $e'), backgroundColor: Colors.orange),
+          SnackBar(content: Text('Failed: ${ErrorMessages.format(e)}'), backgroundColor: Colors.orange),
         );
       }
     }
@@ -172,7 +177,7 @@ class _CronScreenState extends State<CronScreen> {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text('Delete failed: $e'),
+            content: Text('Delete failed: ${ErrorMessages.format(e)}'),
             backgroundColor: Colors.orange,
           ),
         );
@@ -183,26 +188,56 @@ class _CronScreenState extends State<CronScreen> {
   Future<void> _triggerJob(Map<String, dynamic> job) async {
     final jobId = job['id'] as String? ?? '';
     if (jobId.isEmpty) return;
+
+    final isAgent = job['no_agent'] != true;
+    final name = _jobName(job);
+
+    if (isAgent) {
+      final confirmed = await showDialog<bool>(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          title: const Text('Trigger Agent Job?'),
+          content: Text(
+            '"$name" will start an agent session immediately.\n\n'
+            'This may take several minutes and consume API credits.',
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(ctx, false),
+              child: const Text('Cancel'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.pop(ctx, true),
+              child: const Text('Trigger'),
+            ),
+          ],
+        ),
+      );
+      if (confirmed != true) return;
+    }
+
     try {
       await _client.apiPost('cron/jobs/$jobId/trigger');
       if (mounted) {
         ScaffoldMessenger.of(
           context,
-        ).showSnackBar(const SnackBar(content: Text('Job triggered')));
+        ).showSnackBar(SnackBar(content: Text('"$name" triggered')));
+        await _loadJobs();
       }
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Failed: $e'), backgroundColor: Colors.orange),
+          SnackBar(content: Text('Failed: ${ErrorMessages.format(e)}'), backgroundColor: Colors.orange),
         );
       }
     }
   }
 
   Future<void> _showAddJobDialog() async {
-    final result = await _showJobDialog(
-      title: 'Add Cron Job',
-      actionLabel: 'Add',
+    final result = await Navigator.of(context).push<Map<String, dynamic>>(
+      MaterialPageRoute(
+        builder: (_) => ScheduleBuilderPage(actionLabel: 'Add'),
+      ),
     );
     if (result == null || !mounted) return;
 
@@ -228,7 +263,7 @@ class _CronScreenState extends State<CronScreen> {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text('Failed to add job: $e'),
+            content: Text('Failed to add job: ${ErrorMessages.format(e)}'),
             backgroundColor: Colors.orange,
           ),
         );
@@ -237,13 +272,18 @@ class _CronScreenState extends State<CronScreen> {
   }
 
   Future<void> _showEditJobDialog(Map<String, dynamic> job) async {
-    final result = await _showJobDialog(
-      title: 'Edit Cron Job',
-      actionLabel: 'Save',
-      initialName: _jobName(job),
-      initialPrompt: job['prompt'] as String? ?? '',
-      initialSchedule: _scheduleDisplay(job),
-      initialNoAgent: job['no_agent'] == true,
+    final schedule = _scheduleDisplay(job);
+    final result = await Navigator.of(context).push<Map<String, dynamic>>(
+      MaterialPageRoute(
+        builder: (_) => ScheduleBuilderPage(
+          actionLabel: 'Save',
+          initialName: _jobName(job),
+          initialPrompt: job['prompt'] as String? ?? '',
+          initialSchedule: schedule,
+          initialNoAgent: job['no_agent'] == true,
+          initialTimezone: job['timezone'] as String?,
+        ),
+      ),
     );
     if (result == null || !mounted) return;
 
@@ -261,7 +301,7 @@ class _CronScreenState extends State<CronScreen> {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text('Failed to update job: $e'),
+            content: Text('Failed to update job: ${ErrorMessages.format(e)}'),
             backgroundColor: Colors.orange,
           ),
         );
@@ -269,106 +309,63 @@ class _CronScreenState extends State<CronScreen> {
     }
   }
 
-  Future<Map<String, dynamic>?> _showJobDialog({
-    required String title,
-    required String actionLabel,
-    String initialName = '',
-    String initialPrompt = '',
-    String initialSchedule = '',
-    bool initialNoAgent = false,
-  }) async {
-    final nameCtrl = TextEditingController(text: initialName);
-    final promptCtrl = TextEditingController(text: initialPrompt);
-    final scheduleCtrl = TextEditingController(text: initialSchedule);
-    var noAgent = initialNoAgent;
+  String _naturalSchedule(Map<String, dynamic> job) {
+    final schedule = _scheduleDisplay(job);
+    if (schedule.isEmpty) return '';
 
-    try {
-      return await showDialog<Map<String, dynamic>>(
-        context: context,
-        builder: (ctx) => StatefulBuilder(
-          builder: (ctx, setDialogState) => AlertDialog(
-            title: Text(title),
-            content: SingleChildScrollView(
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  TextField(
-                    controller: nameCtrl,
-                    decoration: const InputDecoration(
-                      labelText: 'Name',
-                      hintText: 'e.g., Daily backup',
-                    ),
-                  ),
-                  const SizedBox(height: 12),
-                  TextField(
-                    controller: promptCtrl,
-                    decoration: const InputDecoration(
-                      labelText: 'Prompt',
-                      hintText: 'What should the agent do?',
-                    ),
-                    maxLines: 3,
-                  ),
-                  const SizedBox(height: 12),
-                  TextField(
-                    controller: scheduleCtrl,
-                    decoration: const InputDecoration(
-                      labelText: 'Schedule',
-                      hintText: 'e.g., 0 9 * * * or every 2h',
-                    ),
-                  ),
-                  const SizedBox(height: 12),
-                  SwitchListTile(
-                    value: noAgent,
-                    contentPadding: EdgeInsets.zero,
-                    title: const Text('Script only (no agent)'),
-                    subtitle: const Text(
-                      'Use for cron jobs backed by scripts.',
-                    ),
-                    onChanged: (value) => setDialogState(() => noAgent = value),
-                  ),
-                ],
-              ),
-            ),
-            actions: [
-              TextButton(
-                onPressed: () => Navigator.pop(ctx),
-                child: const Text('Cancel'),
-              ),
-              FilledButton(
-                onPressed: () {
-                  final name = nameCtrl.text.trim();
-                  final prompt = promptCtrl.text.trim();
-                  final schedule = scheduleCtrl.text.trim();
-
-                  if (name.isEmpty || prompt.isEmpty || schedule.isEmpty) {
-                    ScaffoldMessenger.of(ctx).showSnackBar(
-                      const SnackBar(
-                        content: Text(
-                          'Name, prompt, and schedule are required',
-                        ),
-                      ),
-                    );
-                    return;
-                  }
-
-                  Navigator.pop(ctx, {
-                    'name': name,
-                    'prompt': prompt,
-                    'schedule': schedule,
-                    'no_agent': noAgent,
-                  });
-                },
-                child: Text(actionLabel),
-              ),
-            ],
-          ),
-        ),
-      );
-    } finally {
-      nameCtrl.dispose();
-      promptCtrl.dispose();
-      scheduleCtrl.dispose();
+    // Try to generate a natural-language description from the cron expression.
+    final desc = CronValidator.describe(schedule);
+    // If describe returns the raw expression, it means it couldn't parse it.
+    // In that case, fall back to the schedule_display from the backend.
+    if (desc == schedule) {
+      final display = job['schedule_display'] as String?;
+      if (display != null && display.isNotEmpty) return display;
     }
+    return desc;
+  }
+
+  String _formatTimestamp(String iso) {
+    try {
+      final dt = DateTime.parse(iso);
+      final local = dt.toLocal();
+      final now = DateTime.now();
+      String relative;
+      final diff = local.difference(now);
+      if (diff.inMinutes.abs() < 1) {
+        relative = 'just now';
+      } else if (diff.inHours.abs() < 1) {
+        relative = '${diff.inMinutes.abs()} min ${diff.isNegative ? 'ago' : 'from now'}';
+      } else if (diff.inDays.abs() < 1) {
+        relative = '${diff.inHours.abs()} h ${diff.isNegative ? 'ago' : 'from now'}';
+      } else if (diff.inDays.abs() < 7) {
+        relative = '${diff.inDays.abs()} d ${diff.isNegative ? 'ago' : 'from now'}';
+      } else {
+        return '${local.month}/${local.day} ${local.hour.toString().padLeft(2, '0')}:${local.minute.toString().padLeft(2, '0')}';
+      }
+      return relative;
+    } catch (_) {
+      return iso;
+    }
+  }
+
+  Widget _statusBadge(String status) {
+    final color = switch (status.toLowerCase()) {
+      'success' || 'completed' => Colors.green,
+      'failed' || 'error' => Colors.red,
+      'running' || 'pending' => Colors.orange,
+      _ => Colors.grey,
+    };
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1),
+      decoration: BoxDecoration(
+        color: color.withValues(alpha: 0.2),
+        borderRadius: BorderRadius.circular(4),
+      ),
+      child: Text(
+        status,
+        style: TextStyle(fontSize: 10, color: color, fontWeight: FontWeight.w600),
+      ),
+    );
   }
 
   @override
@@ -400,29 +397,12 @@ class _CronScreenState extends State<CronScreen> {
     }
 
     if (_error != null) {
-      return Center(
-        child: Padding(
-          padding: const EdgeInsets.all(32),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              const Icon(Icons.error_outline, size: 48, color: Colors.orange),
-              const SizedBox(height: 16),
-              Text(
-                'Failed to load cron jobs',
-                style: Theme.of(context).textTheme.titleMedium,
-              ),
-              const SizedBox(height: 8),
-              Text(
-                _error!,
-                style: Theme.of(context).textTheme.bodySmall,
-                textAlign: TextAlign.center,
-              ),
-              const SizedBox(height: 24),
-              ElevatedButton(onPressed: _loadJobs, child: const Text('Retry')),
-            ],
-          ),
-        ),
+      return HermesErrorState(
+        error: _error,
+        connection: widget.connection,
+        onRetry: _loadJobs,
+        source: HermesErrorSource.dashboard,
+        title: 'Failed to load cron jobs',
       );
     }
 
@@ -448,11 +428,14 @@ class _CronScreenState extends State<CronScreen> {
           final job = _jobs[index];
           final name = _jobName(job);
           final prompt = _jobPrompt(job);
-          final schedule = _scheduleDisplay(job);
+          final schedule = _naturalSchedule(job);
+          final rawSchedule = _scheduleDisplay(job);
           final paused = _isPaused(job);
           final lastRun = job['last_run_at'] as String?;
           final nextRun = job['next_run_at'] as String?;
           final isNoAgent = job['no_agent'] == true;
+          final lastStatus = job['last_run_status'] as String?;
+          final lastOutput = job['last_run_output'] as String?;
 
           return Card(
             margin: const EdgeInsets.only(bottom: 8),
@@ -584,27 +567,81 @@ class _CronScreenState extends State<CronScreen> {
                             child: Text(
                               schedule,
                               style: TextStyle(
-                                fontFamily: 'monospace',
                                 fontSize: 12,
-                                color: Colors.grey[500],
+                                color: Colors.grey[600],
                               ),
                             ),
                           ),
                         ],
                       ),
+                      // Show raw cron underneath if different from NL preview.
+                      if (rawSchedule != schedule && rawSchedule.isNotEmpty) ...[
+                        const SizedBox(height: 2),
+                        Padding(
+                          padding: const EdgeInsets.only(left: 18),
+                          child: Text(
+                            rawSchedule,
+                            style: TextStyle(
+                              fontFamily: 'monospace',
+                              fontSize: 10,
+                              color: Colors.grey[400],
+                            ),
+                          ),
+                        ),
+                      ],
                     ],
                     if (lastRun != null && lastRun.isNotEmpty) ...[
-                      const SizedBox(height: 2),
-                      Text(
-                        'Last: $lastRun',
-                        style: TextStyle(fontSize: 11, color: Colors.grey[600]),
+                      const SizedBox(height: 4),
+                      Row(
+                        children: [
+                          Icon(Icons.history, size: 12, color: Colors.grey[500]),
+                          const SizedBox(width: 4),
+                          Text(
+                            'Last: ${_formatTimestamp(lastRun)}',
+                            style: TextStyle(fontSize: 11, color: Colors.grey[600]),
+                          ),
+                          if (lastStatus != null && lastStatus.isNotEmpty) ...[
+                            const SizedBox(width: 6),
+                            _statusBadge(lastStatus),
+                          ],
+                        ],
                       ),
                     ],
-                    if (nextRun != null && nextRun.isNotEmpty)
-                      Text(
-                        'Next: $nextRun',
-                        style: TextStyle(fontSize: 11, color: Colors.grey[600]),
+                    if (nextRun != null && nextRun.isNotEmpty) ...[
+                      const SizedBox(height: 2),
+                      Row(
+                        children: [
+                          Icon(Icons.arrow_forward, size: 12, color: Colors.grey[500]),
+                          const SizedBox(width: 4),
+                          Text(
+                            'Next: ${_formatTimestamp(nextRun)}',
+                            style: TextStyle(fontSize: 11, color: Colors.grey[600]),
+                          ),
+                        ],
                       ),
+                    ],
+                    if (lastOutput != null && lastOutput.isNotEmpty) ...[
+                      const SizedBox(height: 4),
+                      Container(
+                        width: double.infinity,
+                        padding: const EdgeInsets.all(8),
+                        decoration: BoxDecoration(
+                          color: Colors.grey.withValues(alpha: 0.08),
+                          borderRadius: BorderRadius.circular(4),
+                        ),
+                        constraints: const BoxConstraints(maxHeight: 60),
+                        child: SingleChildScrollView(
+                          child: Text(
+                            lastOutput,
+                            style: TextStyle(
+                              fontFamily: 'monospace',
+                              fontSize: 10,
+                              color: Colors.grey[600],
+                            ),
+                          ),
+                        ),
+                      ),
+                    ],
                   ],
                 ),
               ),
