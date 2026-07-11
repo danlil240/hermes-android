@@ -4,6 +4,11 @@ All notable changes to this project are documented here. This project adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html). Release notes for
 versions prior to 1.0.7 are in the **What's new** sections of the [README](README.md).
 
+## [1.0.21]
+
+### Fixed
+- **Silent automatic session naming** — removed the `Session titled...` snackbar; automatic names are now assigned without interrupting the user.
+
 ## [1.0.20]
 
 ### Fixed

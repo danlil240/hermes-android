@@ -1081,15 +1081,6 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
     setState(() {});
     _client
         .updateSession(widget.session.id, title: title)
-        .then((_) {
-          if (!mounted) return;
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(
-              content: Text('Session titled "$title"'),
-              duration: const Duration(seconds: 4),
-            ),
-          );
-        })
         .catchError((_) {});
   }
 
