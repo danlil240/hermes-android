@@ -66,9 +66,12 @@ class HermesApp extends StatefulWidget {
 }
 
 class HermesAppState extends State<HermesApp> {
+  final _scaffoldMessengerKey = GlobalKey<ScaffoldMessengerState>();
   bool _unlocked = false;
   bool _biometricAvailable = false;
   bool _biometricEnabled = false;
+  bool _authInProgress = false;
+  String? _lockMessage;
 
   @override
   void initState() {
@@ -77,40 +80,159 @@ class HermesAppState extends State<HermesApp> {
   }
 
   Future<void> _checkBiometric() async {
-    final available = await widget.biometricLock.isAvailable();
     final enabled = widget.prefs.getBool('biometric_lock') ?? false;
+    final available = await widget.biometricLock.isAvailable();
     if (!mounted) return;
     setState(() {
       _biometricAvailable = available;
       _biometricEnabled = enabled;
     });
-    if (enabled && available) {
-      await _promptBiometric();
-    } else {
-      if (!mounted) return;
+    if (!enabled) {
       setState(() => _unlocked = true);
+      return;
     }
+    if (!available) {
+      await _disableBiometricLock(
+        'Biometric unlock is unavailable. App Lock was disabled.',
+      );
+      return;
+    }
+    await _promptBiometric();
   }
 
   Future<void> _promptBiometric() async {
-    final result = await widget.biometricLock.authenticate(
+    final result = await _authenticateWithBiometrics(
       reason: 'Please authenticate to unlock Hermes',
     );
     if (!mounted) return;
-    setState(() {
-      _unlocked = result == BiometricAuthResult.success;
-    });
-    if (result != BiometricAuthResult.success) {
-      // Retry after a short delay if the user canceled
-      Future.delayed(const Duration(seconds: 1), () {
-        if (mounted && !_unlocked) _promptBiometric();
-      });
+    switch (result) {
+      case BiometricAuthResult.success:
+        setState(() {
+          _unlocked = true;
+          _lockMessage = null;
+        });
+      case BiometricAuthResult.unavailable:
+        await _disableBiometricLock(
+          'Biometric unlock is unavailable. App Lock was disabled.',
+        );
+      case BiometricAuthResult.failed:
+        setState(() {
+          _unlocked = false;
+          _lockMessage = 'Authentication failed. Tap Unlock to try again.';
+        });
+      case BiometricAuthResult.canceled:
+        setState(() {
+          _unlocked = false;
+          _lockMessage =
+              'Authentication was canceled. Tap Unlock to try again.';
+        });
     }
   }
 
-  Future<void> _toggleBiometricLock(bool enabled) async {
-    await widget.prefs.setBool('biometric_lock', enabled);
-    setState(() => _biometricEnabled = enabled);
+  Future<BiometricAuthResult> _authenticateWithBiometrics({
+    required String reason,
+  }) async {
+    if (_authInProgress) return BiometricAuthResult.failed;
+    setState(() {
+      _authInProgress = true;
+      _lockMessage = null;
+    });
+    final result = await widget.biometricLock.authenticate(reason: reason);
+    if (mounted) {
+      setState(() => _authInProgress = false);
+    }
+    return result;
+  }
+
+  Future<bool> _toggleBiometricLock(bool enabled) async {
+    if (!enabled) {
+      await widget.prefs.setBool('biometric_lock', false);
+      if (!mounted) return false;
+      setState(() {
+        _biometricEnabled = false;
+        _unlocked = true;
+        _lockMessage = null;
+      });
+      _showBiometricMessage('App Lock disabled.');
+      return false;
+    }
+
+    final available = await widget.biometricLock.isAvailable();
+    if (!mounted) return widget.prefs.getBool('biometric_lock') ?? false;
+    if (!available) {
+      await widget.prefs.setBool('biometric_lock', false);
+      if (!mounted) return false;
+      setState(() {
+        _biometricAvailable = false;
+        _biometricEnabled = false;
+        _unlocked = true;
+        _lockMessage = null;
+      });
+      _showBiometricMessage(
+        'No enrolled biometrics found. App Lock was not enabled.',
+      );
+      return false;
+    }
+
+    setState(() => _biometricAvailable = true);
+    final result = await _authenticateWithBiometrics(
+      reason: 'Authenticate to enable Hermes App Lock',
+    );
+    if (!mounted) return widget.prefs.getBool('biometric_lock') ?? false;
+
+    if (result == BiometricAuthResult.success) {
+      await widget.prefs.setBool('biometric_lock', true);
+      if (!mounted) return true;
+      setState(() {
+        _biometricEnabled = true;
+        _unlocked = true;
+        _lockMessage = null;
+      });
+      _showBiometricMessage('App Lock enabled.');
+      return true;
+    }
+
+    await widget.prefs.setBool('biometric_lock', false);
+    if (!mounted) return false;
+    setState(() {
+      _biometricEnabled = false;
+      _unlocked = true;
+      _lockMessage = null;
+    });
+    _showBiometricMessage(_enableFailureMessage(result));
+    return false;
+  }
+
+  Future<void> _disableBiometricLock(String message) async {
+    await widget.prefs.setBool('biometric_lock', false);
+    if (!mounted) return;
+    setState(() {
+      _biometricEnabled = false;
+      _unlocked = true;
+      _lockMessage = null;
+      _authInProgress = false;
+    });
+    _showBiometricMessage(message);
+  }
+
+  String _enableFailureMessage(BiometricAuthResult result) {
+    return switch (result) {
+      BiometricAuthResult.unavailable =>
+        'Biometric unlock is unavailable. App Lock was not enabled.',
+      BiometricAuthResult.failed =>
+        'Authentication failed. App Lock was not enabled.',
+      BiometricAuthResult.canceled =>
+        'Authentication was canceled. App Lock was not enabled.',
+      BiometricAuthResult.success => 'App Lock enabled.',
+    };
+  }
+
+  void _showBiometricMessage(String message) {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      final messenger = _scaffoldMessengerKey.currentState;
+      messenger?.hideCurrentSnackBar();
+      messenger?.showSnackBar(SnackBar(content: Text(message)));
+    });
   }
 
   @override
@@ -118,6 +240,7 @@ class HermesAppState extends State<HermesApp> {
     const gold = Color(0xFFD4AF37);
 
     return MaterialApp(
+      scaffoldMessengerKey: _scaffoldMessengerKey,
       title: 'Hermes Agent',
       themeMode: HermesApp.getThemeMode(widget.connManager.prefs),
       theme: ThemeData(
@@ -174,7 +297,11 @@ class HermesAppState extends State<HermesApp> {
               biometricEnabled: _biometricEnabled,
               onToggleBiometric: _toggleBiometricLock,
             )
-          : _LockScreen(onRetry: _promptBiometric),
+          : _LockScreen(
+              onRetry: _promptBiometric,
+              authenticating: _authInProgress,
+              message: _lockMessage,
+            ),
     );
   }
 }
@@ -182,9 +309,15 @@ class HermesAppState extends State<HermesApp> {
 /// Full-screen biometric lock shown when the app starts and biometric
 /// lock is enabled.
 class _LockScreen extends StatelessWidget {
-  final VoidCallback onRetry;
+  final Future<void> Function() onRetry;
+  final bool authenticating;
+  final String? message;
 
-  const _LockScreen({required this.onRetry});
+  const _LockScreen({
+    required this.onRetry,
+    required this.authenticating,
+    required this.message,
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -211,11 +344,36 @@ class _LockScreen extends StatelessWidget {
                 context,
               ).textTheme.bodyMedium?.copyWith(color: Colors.grey[500]),
             ),
+            if (message != null) ...[
+              const SizedBox(height: 16),
+              Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 32),
+                child: Text(
+                  message!,
+                  textAlign: TextAlign.center,
+                  style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                    color: Theme.of(context).colorScheme.error,
+                  ),
+                ),
+              ),
+            ],
             const SizedBox(height: 32),
+            if (authenticating) ...[
+              const SizedBox(
+                width: 28,
+                height: 28,
+                child: CircularProgressIndicator(strokeWidth: 2),
+              ),
+              const SizedBox(height: 20),
+            ],
             FilledButton.icon(
-              onPressed: onRetry,
+              onPressed: authenticating
+                  ? null
+                  : () async {
+                      await onRetry();
+                    },
               icon: const Icon(Icons.fingerprint),
-              label: const Text('Unlock'),
+              label: Text(authenticating ? 'Authenticating' : 'Unlock'),
             ),
           ],
         ),
@@ -275,7 +433,7 @@ class HomeScreen extends StatefulWidget {
   final BiometricLock biometricLock;
   final bool biometricAvailable;
   final bool biometricEnabled;
-  final ValueChanged<bool> onToggleBiometric;
+  final Future<bool> Function(bool enabled) onToggleBiometric;
   const HomeScreen({
     required this.connManager,
     required this.biometricLock,
@@ -970,9 +1128,9 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         actions: [
           if (widget.biometricAvailable)
             PopupMenuButton<String>(
-              onSelected: (v) {
+              onSelected: (v) async {
                 if (v == 'biometric') {
-                  widget.onToggleBiometric(!widget.biometricEnabled);
+                  await widget.onToggleBiometric(!widget.biometricEnabled);
                 }
               },
               itemBuilder: (_) => [

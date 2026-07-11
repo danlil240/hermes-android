@@ -26,7 +26,7 @@ class MainNavigationScreen extends StatefulWidget {
   final ConnectionManager connManager;
   final bool biometricAvailable;
   final bool biometricEnabled;
-  final ValueChanged<bool> onToggleBiometric;
+  final Future<bool> Function(bool enabled) onToggleBiometric;
   final VoidCallback onSwitchConnection;
   final VoidCallback onConfigureDashboard;
   final VoidCallback onConnectionChanged;
@@ -51,6 +51,29 @@ class MainNavigationScreen extends StatefulWidget {
 class _MainNavigationScreenState extends State<MainNavigationScreen> {
   int _currentIndex = 0;
   final _scaffoldKey = GlobalKey<ScaffoldState>();
+  late bool _biometricEnabled;
+
+  @override
+  void initState() {
+    super.initState();
+    _biometricEnabled = widget.biometricEnabled;
+  }
+
+  @override
+  void didUpdateWidget(covariant MainNavigationScreen oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.biometricEnabled != widget.biometricEnabled) {
+      _biometricEnabled = widget.biometricEnabled;
+    }
+  }
+
+  Future<bool> _toggleBiometric(bool enabled) async {
+    final nextEnabled = await widget.onToggleBiometric(enabled);
+    if (mounted) {
+      setState(() => _biometricEnabled = nextEnabled);
+    }
+    return nextEnabled;
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -77,8 +100,8 @@ class _MainNavigationScreenState extends State<MainNavigationScreen> {
             connection: widget.connection,
             connManager: widget.connManager,
             biometricAvailable: widget.biometricAvailable,
-            biometricEnabled: widget.biometricEnabled,
-            onToggleBiometric: widget.onToggleBiometric,
+            biometricEnabled: _biometricEnabled,
+            onToggleBiometric: _toggleBiometric,
             onSwitchConnection: widget.onSwitchConnection,
             onConnectionChanged: widget.onConnectionChanged,
           ),
@@ -320,7 +343,7 @@ class _MoreTab extends StatelessWidget {
   final ConnectionManager connManager;
   final bool biometricAvailable;
   final bool biometricEnabled;
-  final ValueChanged<bool> onToggleBiometric;
+  final Future<bool> Function(bool enabled) onToggleBiometric;
   final VoidCallback onSwitchConnection;
   final VoidCallback onConnectionChanged;
 
@@ -379,7 +402,9 @@ class _MoreTab extends StatelessWidget {
                 title: const Text('App Lock'),
                 subtitle: const Text('Require biometric authentication'),
                 value: biometricEnabled,
-                onChanged: onToggleBiometric,
+                onChanged: (enabled) async {
+                  await onToggleBiometric(enabled);
+                },
               ),
             ),
           _FeatureCard(
