@@ -4,6 +4,12 @@ All notable changes to this project are documented here. This project adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html). Release notes for
 versions prior to 1.0.7 are in the **What's new** sections of the [README](README.md).
 
+## [1.0.17]
+
+### Added
+- **Active runs tracking** — background work (chats, services, questions, reconnections) is now tracked with unified status monitoring and lifecycle management via `ActiveRunsManager`.
+- **Smart session titles** — sessions now get intelligently generated titles from preview, timestamp, or ID when no title is set, with placeholder detection and `hasGeneratedTitle` tracking.
+
 ## [1.0.16]
 
 ### Added
