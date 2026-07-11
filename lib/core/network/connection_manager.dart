@@ -757,6 +757,8 @@ class GatewayChatClient {
   final http.Client Function() _streamClientFactory;
   http.Client? _activeStreamClient;
 
+  static final Set<String> _promptContextSentSessions = <String>{};
+
   GatewayChatClient(
     this._api, {
     http.Client Function()? streamClientFactory,
@@ -797,6 +799,21 @@ class GatewayChatClient {
     return messages;
   }
 
+  static List<Map<String, dynamic>> _withInitialPromptContext(
+    String sessionId,
+    List<Map<String, dynamic>> messages,
+  ) {
+    if (_promptContextSentSessions.contains(sessionId)) return messages;
+    return [
+      {'role': 'system', 'content': PromptSource.description},
+      ...messages,
+    ];
+  }
+
+  static void _markPromptContextSent(String sessionId) {
+    _promptContextSentSessions.add(sessionId);
+  }
+
   /// Parse one SSE frame. Returns streamed text token, or null for non-token
   /// frames. Hermes tool progress frames are delivered via [onToolProgress].
   static String? parseSseFrame(
@@ -828,7 +845,18 @@ class GatewayChatClient {
         return null;
       }
       if (eventType == 'hermes.question') {
-        if (parsed is Map<String, dynamic>) onQuestion?.call(parsed);
+        if (parsed is Map<String, dynamic>) {
+          // Accept both the canonical payload and the envelope emitted by
+          // some Hermes gateways:
+          //   data: {"type": ..., "question_id": ...}
+          //   data: {"event":"hermes.question", "question": {...}}
+          final question = parsed['question'];
+          if (question is Map<String, dynamic>) {
+            onQuestion?.call(question);
+          } else {
+            onQuestion?.call(parsed);
+          }
+        }
         return null;
       }
 
@@ -867,17 +895,21 @@ class GatewayChatClient {
     if (submissionId != null) {
       headers['X-Hermes-Submission-Id'] = submissionId;
     }
+    final initialHistory = _withInitialPromptContext(sessionId, history ?? const []);
     return BackgroundChatService.start(
       endpoint: '$_baseUrl/v1/runs',
       headers: headers,
       body: jsonEncode({
         'model': model ?? 'hermes-agent',
-        'input': PromptSource.annotate(message),
+        'input': message,
         'session_id': sessionId,
-        'conversation_history': history ?? const <Map<String, dynamic>>[],
+        'conversation_history': initialHistory,
       }),
       sessionId: sessionId,
-    );
+    ).then((started) {
+      if (started) _markPromptContextSent(sessionId);
+      return started;
+    });
   }
 
   /// Send a message and stream the assistant response token-by-token.
@@ -893,17 +925,17 @@ class GatewayChatClient {
     required void Function() onDone,
     required void Function(String error) onError,
   }) async {
-    final messages = buildChatCompletionMessages(
-      message: message,
-      history: history,
+    final messages = _withInitialPromptContext(
+      sessionId,
+      buildChatCompletionMessages(
+        message: message,
+        history: history,
+      ),
     );
 
     final body = {
       'model': model ?? 'hermes-agent',
-      'messages': [
-        {'role': 'system', 'content': PromptSource.description},
-        ...messages,
-      ],
+      'messages': messages,
       'stream': true,
     };
 
@@ -941,13 +973,15 @@ class GatewayChatClient {
         return;
       }
 
+      _markPromptContextSent(sessionId);
       String buffer = '';
       await response.stream.transform(utf8.decoder).forEach((chunk) {
         buffer += chunk;
-        while (buffer.contains('\n\n')) {
-          final eventEnd = buffer.indexOf('\n\n');
-          final frame = buffer.substring(0, eventEnd);
-          buffer = buffer.substring(eventEnd + 2);
+        while (true) {
+          final separator = RegExp(r'\r?\n\r?\n').firstMatch(buffer);
+          if (separator == null) break;
+          final frame = buffer.substring(0, separator.start);
+          buffer = buffer.substring(separator.end);
 
           final token = parseSseFrame(
             frame,

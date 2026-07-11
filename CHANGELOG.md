@@ -4,6 +4,13 @@ All notable changes to this project are documented here. This project adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html). Release notes for
 versions prior to 1.0.7 are in the **What's new** sections of the [README](README.md).
 
+## [1.0.19]
+
+### Fixed
+- **Hidden one-time Android context** — Android prompts are sent as a hidden session-level system instruction instead of visible text appended to every user message.
+- **Automatic session naming UX** — auto-assigned names no longer show a Rename action or dialog at the start of a chat.
+- **SSE question compatibility** — wrapped Hermes question events and CRLF-delimited SSE frames are handled correctly.
+
 ## [1.0.18]
 
 ### Added

@@ -1,11 +1,11 @@
 /// Context attached to prompts submitted by the Hermes Android client.
 class PromptSource {
   static const String description =
-      '[Prompt source: Hermes Android mobile app. '
+      'Prompt source: Hermes Android mobile app. '
       'This app is a mobile client for Hermes Agent: it can chat with the '
       'agent, stream replies, submit voice-dictated prompts, manage sessions, '
       'and access cron jobs, skills, memory, settings, services, diagnostics, '
-      'and structured questions.]\n\n'
+      'and structured questions.\n\n'
       'Android interaction instructions: When the user must choose between '
       'options, use a structured question rendered as buttons instead of '
       'asking them to type a choice. Emit a hermes.question event with a '

@@ -345,6 +345,8 @@ void main() {
 
       expect(prompt, contains('Prompt source: Hermes Android mobile app'));
       expect(prompt, contains('voice-dictated prompts'));
+      expect(prompt, isNot(contains('[')));
+      expect(prompt, isNot(contains(']')));
       expect(prompt, endsWith('User prompt:\nhello'));
     });
 
@@ -435,6 +437,25 @@ void main() {
       expect(question!['title'], 'What should I update?');
       expect(question!['mode'], 'single');
     });
+
+    test('unwraps wrapped Hermes question SSE payloads', () {
+      Map<String, dynamic>? question;
+      final token = GatewayChatClient.parseSseFrame(
+        'event: hermes.question\r\n'
+        'data: {"event":"hermes.question","question":{"type":"choice_question",'
+        '"question_id":"q_wrapped","title":"Choose features","mode":"multiple",'
+        '"min_selected":1,"options":[{"id":"chat","label":"Chat"}]}}\r\n',
+        onQuestion: (q) => question = q,
+      );
+
+      expect(token, isNull);
+      expect(question, isNotNull);
+      expect(question!['question_id'], 'q_wrapped');
+      expect(question!['type'], 'choice_question');
+      expect(question!['title'], 'Choose features');
+      expect(question!['mode'], 'multiple');
+    });
+
     test('streaming chat survives closing the shared API client', () async {
       final streamClient = _ControlledStreamClient();
       final apiClient = ApiClient(
@@ -468,6 +489,7 @@ void main() {
         requestMessages.first['content'],
         PromptSource.description,
       );
+      expect(requestMessages.last['content'], 'hello');
       apiClient.close();
 
       streamClient.controller.add(

@@ -1088,69 +1088,10 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
             SnackBar(
               content: Text('Session titled "$title"'),
               duration: const Duration(seconds: 4),
-              action: SnackBarAction(
-                label: 'Rename',
-                onPressed: () => _showRenameDialog(title),
-              ),
             ),
           );
         })
         .catchError((_) {});
-  }
-
-  void _showRenameDialog(String currentTitle) {
-    final controller = TextEditingController(text: currentTitle);
-    showDialog(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: const Text('Rename Session'),
-        content: TextField(
-          controller: controller,
-          decoration: const InputDecoration(
-            labelText: 'Session title',
-            border: OutlineInputBorder(),
-          ),
-          autofocus: true,
-          onSubmitted: (value) {
-            Navigator.pop(ctx);
-            _doRename(value.trim());
-          },
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(ctx),
-            child: const Text('Cancel'),
-          ),
-          FilledButton(
-            onPressed: () {
-              Navigator.pop(ctx);
-              _doRename(controller.text.trim());
-            },
-            child: const Text('Save'),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Future<void> _doRename(String newTitle) async {
-    if (newTitle.isEmpty) return;
-    try {
-      await _client.updateSession(widget.session.id, title: newTitle);
-      if (!mounted) return;
-      setState(() => _currentTitle = newTitle);
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(SnackBar(content: Text('Session renamed to "$newTitle"')));
-    } catch (e) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text('Failed to rename: ${ErrorMessages.format(e)}'),
-          backgroundColor: Colors.red,
-        ),
-      );
-    }
   }
 
   String _exportTranscript() {
