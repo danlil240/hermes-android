@@ -26,11 +26,15 @@ The app connects to your Hermes server over your home Wi-Fi, a private Tailscale
 
 ## Current release
 
-- Version: **1.0.10**
+- Version: **1.0.11**
 - Package: `com.hermesagent.hermes_android`
 - Recommended APK for most modern phones: `app-arm64-v8a-release.apk`
 - Other APKs: `app-armeabi-v7a-release.apk`, `app-x86_64-release.apk`
 - Download: [GitHub Releases](https://github.com/danlil240/hermes-android/releases/latest)
+
+## What's new in v1.0.11
+
+- **Background-safe chat streaming** — leaving the app while Hermes is replying no longer aborts the active chat request or marks its session as failed.
 
 ## What's new in v1.0.10
 

@@ -4,6 +4,13 @@ All notable changes to this project are documented here. This project adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html). Release notes for
 versions prior to 1.0.7 are in the **What's new** sections of the [README](README.md).
 
+## [1.0.11]
+
+### Fixed
+- **Chat sessions no longer fail when the app is exited mid-response** — the
+  streaming request now has its own HTTP client and can finish independently
+  from the chat screen's lifecycle.
+
 ## [1.0.10]
 
 ### Added
