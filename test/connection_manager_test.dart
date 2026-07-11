@@ -18,14 +18,15 @@ String? _header(http.BaseRequest request, String name) {
 }
 
 class _ControlledStreamClient extends http.BaseClient {
-  final StreamController<List<int>> controller =
-      StreamController<List<int>>.broadcast();
+  final StreamController<List<int>> controller = StreamController<List<int>>();
+  final Completer<void> requestStarted = Completer<void>();
   int sendCount = 0;
   bool closed = false;
 
   @override
   Future<http.StreamedResponse> send(http.BaseRequest request) async {
     sendCount++;
+    requestStarted.complete();
     return http.StreamedResponse(controller.stream, 200, request: request);
   }
 
@@ -437,6 +438,7 @@ void main() {
         onError: fail,
       );
 
+      await streamClient.requestStarted.future;
       apiClient.close();
 
       streamClient.controller.add(
