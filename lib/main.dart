@@ -4,8 +4,10 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'dart:async';
 import 'core/auth/biometric_lock.dart';
 import 'core/network/connection_manager.dart';
+import 'core/services/app_updater.dart';
 import 'core/storage/secure_storage.dart';
 import 'core/storage/session_cache.dart';
+import 'features/app_update/update_dialog.dart';
 import 'features/connection/connection_wizard.dart';
 import 'features/navigation/main_navigation_screen.dart';
 import 'shared/responsive.dart';
@@ -67,6 +69,7 @@ class HermesApp extends StatefulWidget {
 
 class HermesAppState extends State<HermesApp> {
   final _scaffoldMessengerKey = GlobalKey<ScaffoldMessengerState>();
+  final _navigatorKey = GlobalKey<NavigatorState>();
   bool _unlocked = false;
   bool _biometricAvailable = false;
   bool _biometricEnabled = false;
@@ -82,6 +85,26 @@ class HermesAppState extends State<HermesApp> {
     super.initState();
     _checkBiometric();
     _loadInitialConnection();
+    _checkForUpdate();
+  }
+
+  Future<void> _checkForUpdate() async {
+    final release = await AppUpdater.checkForUpdate();
+    if (!mounted || release == null) return;
+    void showUpdateDialog() {
+      final ctx = _navigatorKey.currentContext;
+      if (ctx == null) {
+        WidgetsBinding.instance.addPostFrameCallback((_) => showUpdateDialog());
+        return;
+      }
+      showDialog(
+        context: ctx,
+        barrierDismissible: false,
+        builder: (_) => UpdateDialog(release: release),
+      );
+    }
+
+    showUpdateDialog();
   }
 
   Future<void> _loadInitialConnection() async {
@@ -261,6 +284,7 @@ class HermesAppState extends State<HermesApp> {
 
     return MaterialApp(
       scaffoldMessengerKey: _scaffoldMessengerKey,
+      navigatorKey: _navigatorKey,
       title: 'Hermes Agent',
       themeMode: HermesApp.getThemeMode(widget.connManager.prefs),
       theme: ThemeData(
@@ -347,10 +371,9 @@ class HermesAppState extends State<HermesApp> {
       onSwitchConnection: () {
         setState(() {
           _initialConnection = null;
-          _initialConnectionLoaded = false;
+          _initialConnectionLoaded = true;
           _pendingDashboardConfig = null;
         });
-        _loadInitialConnection();
       },
       onConfigureDashboard: () {
         setState(() {
