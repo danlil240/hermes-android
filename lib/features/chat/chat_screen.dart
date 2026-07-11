@@ -71,6 +71,10 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
   // Verbose mode
   bool _verboseMode = false;
 
+  // Message selection mode. Long-pressing any sent or received message starts
+  // it; subsequent taps add/remove messages from the selection.
+  final Set<int> _selectedMessageIndices = <int>{};
+
   // Current agent action for the activity card
   String? _currentAction;
   Timer? _elapsedTimer;
@@ -268,8 +272,8 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
     }
     final atBottom =
         _scrollController.hasClients &&
-        _scrollController.position.pixels >=
-            _scrollController.position.maxScrollExtent - 200;
+        // The list is reversed so offset zero is the newest message.
+        _scrollController.position.pixels <= 200;
     if (atBottom != !_showScrollToBottom) {
       setState(() => _showScrollToBottom = !atBottom);
     }
@@ -278,7 +282,7 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
   void _scrollToBottom() {
     if (_scrollController.hasClients) {
       _scrollController.animateTo(
-        _scrollController.position.maxScrollExtent,
+        0,
         duration: const Duration(milliseconds: 300),
         curve: Curves.easeOut,
       );
@@ -365,14 +369,6 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
           if (_scrollController.hasClients) {
             _scrollController.jumpTo(
               saved.clamp(0.0, _scrollController.position.maxScrollExtent),
-            );
-          }
-        });
-      } else {
-        WidgetsBinding.instance.addPostFrameCallback((_) {
-          if (_scrollController.hasClients) {
-            _scrollController.jumpTo(
-              _scrollController.position.maxScrollExtent,
             );
           }
         });
@@ -845,14 +841,6 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
                 );
               }
             });
-          } else {
-            WidgetsBinding.instance.addPostFrameCallback((_) {
-              if (_scrollController.hasClients) {
-                _scrollController.jumpTo(
-                  _scrollController.position.maxScrollExtent,
-                );
-              }
-            });
           }
         } catch (e) {
           setState(() {
@@ -1293,6 +1281,9 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
   }
 
   Widget _buildInputBar() {
+    if (_selectedMessageIndices.isNotEmpty) {
+      return _buildMessageSelectionBar();
+    }
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
       decoration: BoxDecoration(
@@ -1367,6 +1358,65 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
                     ),
             ),
           ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildMessageSelectionBar() {
+    final theme = Theme.of(context);
+    final count = _selectedMessageIndices.length;
+    return Material(
+      color: theme.colorScheme.surface,
+      elevation: 4,
+      child: SafeArea(
+        top: false,
+        child: Row(
+          children: [
+            IconButton(
+              icon: const Icon(Icons.close),
+              tooltip: 'Cancel selection',
+              onPressed: () => setState(_selectedMessageIndices.clear),
+            ),
+            Expanded(
+              child: Text(
+                '$count ${count == 1 ? 'message' : 'messages'} selected',
+                style: theme.textTheme.titleSmall,
+              ),
+            ),
+            IconButton(
+              icon: const Icon(Icons.copy_outlined),
+              tooltip: 'Copy selected messages',
+              onPressed: _copySelectedMessages,
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  void _toggleMessageSelection(int index) {
+    setState(() {
+      if (!_selectedMessageIndices.add(index)) {
+        _selectedMessageIndices.remove(index);
+      }
+    });
+  }
+
+  Future<void> _copySelectedMessages() async {
+    final selected = _selectedMessageIndices.toList()..sort();
+    final text = selected
+        .map((index) => (_messages[index]['content'] as String?) ?? '')
+        .where((content) => content.isNotEmpty)
+        .join('\n\n');
+    if (text.isEmpty) return;
+    await Clipboard.setData(ClipboardData(text: text));
+    if (!mounted) return;
+    setState(_selectedMessageIndices.clear);
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(
+          'Copied ${selected.length} ${selected.length == 1 ? 'message' : 'messages'}',
         ),
       ),
     );
@@ -1522,10 +1572,13 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
 
     return ListView.builder(
       controller: _scrollController,
+      // Keep the newest message anchored at the viewport. This avoids the
+      // visible top-of-history frame while a large session is being laid out.
+      reverse: true,
       padding: const EdgeInsets.only(bottom: 80),
       itemCount: displayMessages.length,
       itemBuilder: (context, index) {
-        final item = displayMessages[index];
+        final item = displayMessages[displayMessages.length - 1 - index];
 
         if (item is List<Map<String, dynamic>>) {
           return _ToolProgressCard(items: item, verbose: _verboseMode);
@@ -1545,7 +1598,14 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
         final isUser = role == 'user';
         final deliveryState = msg['deliveryState'] as String?;
 
+        final messageIndex = _messages.indexOf(msg);
         return _MessageBubble(
+          selected: _selectedMessageIndices.contains(messageIndex),
+          selectionMode: _selectedMessageIndices.isNotEmpty,
+          onTap: _selectedMessageIndices.isNotEmpty
+              ? () => _toggleMessageSelection(messageIndex)
+              : null,
+          onLongPress: () => _toggleMessageSelection(messageIndex),
           content: content,
           isUser: isUser,
           verbose: _verboseMode,
@@ -1573,6 +1633,10 @@ class _MessageBubble extends StatelessWidget {
   final VoidCallback? onRetry;
   final VoidCallback? onEdit;
   final VoidCallback? onReconnect;
+  final VoidCallback? onTap;
+  final VoidCallback? onLongPress;
+  final bool selected;
+  final bool selectionMode;
 
   const _MessageBubble({
     required this.content,
@@ -1582,6 +1646,10 @@ class _MessageBubble extends StatelessWidget {
     this.onRetry,
     this.onEdit,
     this.onReconnect,
+    this.onTap,
+    this.onLongPress,
+    this.selected = false,
+    this.selectionMode = false,
   });
 
   @override
@@ -1622,6 +1690,9 @@ class _MessageBubble extends StatelessWidget {
       decoration: BoxDecoration(
         color: isUser ? userBubbleColor : assistantBubbleColor,
         borderRadius: BorderRadius.circular(18),
+        border: selected
+            ? Border.all(color: theme.colorScheme.primary, width: 2)
+            : null,
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -1743,12 +1814,29 @@ class _MessageBubble extends StatelessWidget {
       ),
     );
 
+    final message = GestureDetector(
+      onTap: onTap,
+      onLongPress: onLongPress,
+      child: bubble,
+    );
+
     return Row(
       mainAxisAlignment: isUser
           ? MainAxisAlignment.end
           : MainAxisAlignment.start,
       crossAxisAlignment: CrossAxisAlignment.start,
-      children: [bubble],
+      children: [
+        if (selectionMode)
+          Padding(
+            padding: const EdgeInsets.only(left: 8, top: 14),
+            child: Icon(
+              selected ? Icons.check_circle : Icons.radio_button_unchecked,
+              size: 20,
+              color: selected ? theme.colorScheme.primary : Colors.grey,
+            ),
+          ),
+        message,
+      ],
     );
   }
 

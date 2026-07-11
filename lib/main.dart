@@ -289,19 +289,21 @@ class HermesAppState extends State<HermesApp> {
           foregroundColor: Colors.black,
         ),
       ),
-      home: _unlocked
-          ? HomeScreen(
-              connManager: widget.connManager,
-              biometricLock: widget.biometricLock,
-              biometricAvailable: _biometricAvailable,
-              biometricEnabled: _biometricEnabled,
-              onToggleBiometric: _toggleBiometricLock,
-            )
-          : _LockScreen(
-              onRetry: _promptBiometric,
-              authenticating: _authInProgress,
-              message: _lockMessage,
-            ),
+      home: SelectionArea(
+        child: _unlocked
+            ? HomeScreen(
+                connManager: widget.connManager,
+                biometricLock: widget.biometricLock,
+                biometricAvailable: _biometricAvailable,
+                biometricEnabled: _biometricEnabled,
+                onToggleBiometric: _toggleBiometricLock,
+              )
+            : _LockScreen(
+                onRetry: _promptBiometric,
+                authenticating: _authInProgress,
+                message: _lockMessage,
+              ),
+      ),
     );
   }
 }
