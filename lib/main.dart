@@ -309,27 +309,29 @@ class HermesAppState extends State<HermesApp> {
           foregroundColor: Colors.black,
         ),
       ),
-      home: !_unlocked
-          ? _LockScreen(
-              onRetry: _promptBiometric,
-              authenticating: _authInProgress,
-              message: _lockMessage,
-            )
-          : !_initialConnectionLoaded
-              ? const _LoadingScreen()
-              : _initialConnection != null
-                  ? _buildMainNavigation(_initialConnection!)
-                  : HomeScreen(
-                      connManager: widget.connManager,
-                      biometricLock: widget.biometricLock,
-                      biometricAvailable: _biometricAvailable,
-                      biometricEnabled: _biometricEnabled,
-                      onToggleBiometric: _toggleBiometricLock,
-                      pendingDashboardConfig: _pendingDashboardConfig,
-                      onDashboardConfigShown: () {
-                        setState(() => _pendingDashboardConfig = null);
-                      },
-                    ),
+      home: SelectionArea(
+        child: !_unlocked
+            ? _LockScreen(
+                onRetry: _promptBiometric,
+                authenticating: _authInProgress,
+                message: _lockMessage,
+              )
+            : !_initialConnectionLoaded
+                ? const _LoadingScreen()
+                : _initialConnection != null
+                    ? _buildMainNavigation(_initialConnection!)
+                    : HomeScreen(
+                        connManager: widget.connManager,
+                        biometricLock: widget.biometricLock,
+                        biometricAvailable: _biometricAvailable,
+                        biometricEnabled: _biometricEnabled,
+                        onToggleBiometric: _toggleBiometricLock,
+                        pendingDashboardConfig: _pendingDashboardConfig,
+                        onDashboardConfigShown: () {
+                          setState(() => _pendingDashboardConfig = null);
+                        },
+                      ),
+      ),
     );
   }
 
