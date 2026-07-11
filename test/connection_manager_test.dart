@@ -6,6 +6,7 @@ import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:hermes_android/core/network/connection_manager.dart';
+import 'package:hermes_android/core/network/prompt_source.dart';
 
 /// Case-insensitive request header lookup — package:http normalises header
 /// names when sending, so tests should not assume a particular casing.
@@ -22,10 +23,12 @@ class _ControlledStreamClient extends http.BaseClient {
   final Completer<void> requestStarted = Completer<void>();
   int sendCount = 0;
   bool closed = false;
+  String? requestBody;
 
   @override
   Future<http.StreamedResponse> send(http.BaseRequest request) async {
     sendCount++;
+    requestBody = request is http.Request ? request.body : null;
     requestStarted.complete();
     return http.StreamedResponse(controller.stream, 200, request: request);
   }
@@ -337,6 +340,25 @@ void main() {
   });
 
   group('GatewayChatClient', () {
+    test('annotates prompts with Android source and capabilities', () {
+      final prompt = PromptSource.annotate('hello');
+
+      expect(prompt, contains('Prompt source: Hermes Android mobile app'));
+      expect(prompt, contains('voice-dictated prompts'));
+      expect(prompt, endsWith('User prompt:\nhello'));
+    });
+
+    test('instructs Hermes to use structured button questions', () {
+      expect(PromptSource.description, contains('structured question'));
+      expect(PromptSource.description, contains('choice_question'));
+      expect(PromptSource.description, contains('mode=multiple'));
+      expect(PromptSource.description, contains('hermes.question'));
+      expect(
+        PromptSource.description,
+        contains('Do not ask choice questions as plain text'),
+      );
+    });
+
     test('appends latest user message to existing history exactly once', () {
       final messages = GatewayChatClient.buildChatCompletionMessages(
         message: 'new question',
@@ -439,6 +461,13 @@ void main() {
       );
 
       await streamClient.requestStarted.future;
+      final requestJson = jsonDecode(streamClient.requestBody!) as Map<String, dynamic>;
+      final requestMessages = requestJson['messages'] as List<dynamic>;
+      expect(requestMessages.first['role'], 'system');
+      expect(
+        requestMessages.first['content'],
+        PromptSource.description,
+      );
       apiClient.close();
 
       streamClient.controller.add(

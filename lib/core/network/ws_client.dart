@@ -7,6 +7,7 @@
 import 'dart:async';
 import 'dart:convert';
 import 'package:web_socket_channel/io.dart';
+import 'prompt_source.dart';
 
 /// A JSON-RPC error response from the gateway.
 class JsonRpcError implements Exception {
@@ -240,7 +241,7 @@ class WsClient {
     StreamCallback? onEvent,
   }) async {
     final result = await sendStreaming('prompt.submit', {
-      'message': message,
+      'message': PromptSource.annotate(message),
     }, onEvent: onEvent);
     if (result['error'] != null) {
       final errMap = result['error'] as Map<String, dynamic>;
@@ -252,7 +253,10 @@ class WsClient {
 
   /// Submit a message to the active session (non-streaming, backward-compatible).
   Future<String> sendMessage(String message) async {
-    final result = await send('prompt.submit', {'message': message});
+    final result = await send(
+      'prompt.submit',
+      {'message': PromptSource.annotate(message)},
+    );
     if (result['error'] != null) {
       final errMap = result['error'] as Map<String, dynamic>;
       final errorMsg = errMap['message'] as String?;

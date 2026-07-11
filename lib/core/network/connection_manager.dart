@@ -7,6 +7,7 @@ import 'package:http/http.dart' as http;
 import 'background_chat_service.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:uuid/uuid.dart';
+import 'prompt_source.dart';
 import '../models/connection.dart';
 import '../models/service.dart';
 import '../models/session.dart';
@@ -871,7 +872,7 @@ class GatewayChatClient {
       headers: headers,
       body: jsonEncode({
         'model': model ?? 'hermes-agent',
-        'input': message,
+        'input': PromptSource.annotate(message),
         'session_id': sessionId,
         'conversation_history': history ?? const <Map<String, dynamic>>[],
       }),
@@ -899,7 +900,10 @@ class GatewayChatClient {
 
     final body = {
       'model': model ?? 'hermes-agent',
-      'messages': messages,
+      'messages': [
+        {'role': 'system', 'content': PromptSource.description},
+        ...messages,
+      ],
       'stream': true,
     };
 

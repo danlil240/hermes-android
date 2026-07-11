@@ -4,6 +4,12 @@ All notable changes to this project are documented here. This project adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html). Release notes for
 versions prior to 1.0.7 are in the **What's new** sections of the [README](README.md).
 
+## [1.0.18]
+
+### Added
+- **Android prompt context** — prompts sent from Android now identify the mobile client and its capabilities to Hermes.
+- **Structured choice guidance** — Hermes is instructed to use native structured questions and buttons for choices instead of plain-text options.
+
 ## [1.0.17]
 
 ### Added
