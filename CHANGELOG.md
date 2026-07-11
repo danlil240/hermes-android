@@ -4,6 +4,16 @@ All notable changes to this project are documented here. This project adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html). Release notes for
 versions prior to 1.0.7 are in the **What's new** sections of the [README](README.md).
 
+## [1.0.23]
+
+### Added
+- **Background data preloading** — sessions and chat history are preloaded in the background with silent refresh and caching for faster app startup.
+
+## [1.0.22]
+
+### Added
+- **Selectable text and copy** — app text is now selectable and chat messages can be copied.
+
 ## [1.0.21]
 
 ### Fixed
