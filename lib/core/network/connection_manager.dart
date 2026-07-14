@@ -360,10 +360,12 @@ class ApiClient {
   // ── Session management ───────────────────────────────────────────────
 
   Future<void> deleteSession(String sessionId) async {
+    final encodedId = Uri.encodeComponent(sessionId);
     final res = await _http.delete(
-      Uri.parse('$baseUrl/api/sessions/$sessionId'),
+      Uri.parse('$baseUrl/api/sessions/$encodedId'),
       headers: _headers,
     );
+    if (res.statusCode == 404) return;
     if (res.statusCode < 200 || res.statusCode >= 300) {
       throw Exception('HTTP ${res.statusCode}: ${res.body}');
     }
