@@ -452,7 +452,7 @@ class _ConfirmationCard extends StatelessWidget {
                 Expanded(
                   child: OutlinedButton(
                     onPressed: () =>
-                        onAnswer(q.id, {'confirmed': false}),
+                        onAnswer(q.id, {'cancelled': true}),
                     child: Text(q.cancelLabel ?? 'Cancel'),
                   ),
                 ),
@@ -525,7 +525,7 @@ class _TextInputCardState extends State<_TextInputCard> {
   void _submit() {
     final text = _controller.text.trim();
     if (text.isEmpty) return;
-    widget.onAnswer(widget.question.id, {'text_value': text});
+    widget.onAnswer(widget.question.id, {'text': text});
   }
 
   @override
@@ -613,7 +613,7 @@ class _NumberInputCardState extends State<_NumberInputCard> {
     final text = _controller.text.trim();
     final num = double.tryParse(text);
     if (num == null) return;
-    widget.onAnswer(widget.question.id, {'number_value': num});
+    widget.onAnswer(widget.question.id, {'number': num});
   }
 
   @override
@@ -725,7 +725,7 @@ class _DateTimeCardState extends State<_DateTimeCard> {
   void _submit() {
     if (_selected == null) return;
     widget.onAnswer(widget.question.id, {
-      'date_time_value': _selected!.toIso8601String(),
+      'datetime': _selected!.toIso8601String(),
     });
   }
 

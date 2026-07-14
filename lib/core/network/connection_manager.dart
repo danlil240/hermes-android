@@ -703,15 +703,6 @@ class ApiClient {
     return [];
   }
 
-  Future<Map<String, dynamic>> getQuestion(String questionId) async {
-    final res = await _http.get(
-      Uri.parse('$baseUrl/api/questions/$questionId'),
-      headers: _headers,
-    );
-    if (res.statusCode != 200) throw Exception('HTTP ${res.statusCode}');
-    return jsonDecode(res.body) as Map<String, dynamic>;
-  }
-
   Future<Map<String, dynamic>> answerQuestion(
     String questionId,
     Map<String, dynamic> answer,

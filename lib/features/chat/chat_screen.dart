@@ -18,6 +18,7 @@ import '../../core/models/question.dart';
 import '../../core/network/connection_manager.dart';
 import '../../core/network/background_chat_service.dart';
 import '../../core/storage/session_cache.dart';
+import '../../core/utils/message_content.dart';
 import '../questions/question_widgets.dart';
 import '../../shared/responsive.dart';
 import '../../shared/external_links.dart';
@@ -332,14 +333,14 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
       if (localPending.isNotEmpty) {
         final serverUserContents = messages
             .where((m) => m['role'] == 'user')
-            .map((m) => (m['content'] as String?) ?? '')
+            .map((m) => messageContentToText(m['content']))
             .toSet();
         final serverAssistantContents = messages
             .where((m) => m['role'] == 'assistant')
-            .map((m) => (m['content'] as String?) ?? '')
+            .map((m) => messageContentToText(m['content']))
             .toSet();
         for (final m in localPending) {
-          final content = (m['content'] as String?) ?? '';
+          final content = messageContentToText(m['content']);
           final role = m['role'] as String? ?? '';
           if (content.isEmpty) continue;
           final isInServer = role == 'user'
@@ -454,7 +455,7 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
       }
       // Partial-result recovery for assistant message
       if (_messages.isNotEmpty && _messages.last['role'] == 'assistant') {
-        final assistantContent = _messages.last['content'] as String? ?? '';
+        final assistantContent = messageContentToText(_messages.last['content']);
         if (assistantContent.isNotEmpty) {
           _messages.last['deliveryState'] = 'incomplete';
           _messages.last['error'] = error;
@@ -525,7 +526,7 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
           (msg['toolCallName'] as String?) ??
           '';
       final toolCallId = (msg['tool_call_id'] as String?) ?? '';
-      final content = (msg['content'] as String?) ?? '';
+      final content = messageContentToText(msg['content']);
 
       String toolName = name.isNotEmpty ? name : '';
       if (toolName.isEmpty && content.isNotEmpty) {
@@ -609,6 +610,33 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
         type == 'text_input_question' ||
         type == 'number_question' ||
         type == 'date_time_question';
+  }
+
+  /// Extract a question_id from a message if it contains a question block.
+  /// Returns null if the message is not a question-bearing message.
+  String? _extractQuestionIdFromMessage(Map<String, dynamic> msg) {
+    final type = (msg['type'] as String?) ?? '';
+    if (_isQuestionType(type)) {
+      return msg['question_id']?.toString() ?? msg['id']?.toString();
+    }
+    final questionField = msg['question'];
+    if (questionField is Map<String, dynamic>) {
+      return questionField['question_id']?.toString() ??
+          questionField['id']?.toString();
+    }
+    final blocks = msg['blocks'];
+    if (blocks is List) {
+      for (final block in blocks) {
+        if (block is Map<String, dynamic>) {
+          final blockType = (block['type'] as String?) ?? '';
+          if (_isQuestionType(blockType)) {
+            return block['question_id']?.toString() ??
+                block['id']?.toString();
+          }
+        }
+      }
+    }
+    return null;
   }
 
   /// Fetch pending questions for this session from the API.
@@ -857,7 +885,7 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
         // incomplete rather than discarding it.
         setState(() {
           if (_messages.isNotEmpty && _messages.last['role'] == 'assistant') {
-            final assistantContent = _messages.last['content'] as String? ?? '';
+            final assistantContent = messageContentToText(_messages.last['content']);
             if (assistantContent.isNotEmpty) {
               _messages.last['deliveryState'] = 'incomplete';
               _messages.last['error'] = error;
@@ -920,7 +948,7 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
     final failedIndex = _messages.indexWhere((m) => identical(m, failedMsg));
     if (failedIndex < 0) return;
 
-    final text = failedMsg['content'] as String? ?? '';
+    final text = messageContentToText(failedMsg['content']);
     final submissionId = failedMsg['submissionId'] as String?;
 
     // Remove the failed user message and any incomplete assistant
@@ -946,7 +974,7 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
     final failedIndex = _messages.indexWhere((m) => identical(m, failedMsg));
     if (failedIndex < 0) return;
 
-    final text = failedMsg['content'] as String? ?? '';
+    final text = messageContentToText(failedMsg['content']);
 
     setState(() {
       _messages.removeAt(failedIndex);
@@ -1059,7 +1087,7 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
     final userMsgs = _messages.where((m) => m['role'] == 'user').toList();
     if (userMsgs.isEmpty) return;
     _autoTitled = true;
-    final firstContent = (userMsgs.first['content'] as String?) ?? '';
+    final firstContent = messageContentToText(userMsgs.first['content']);
     if (firstContent.isEmpty) return;
     final cleaned = firstContent.replaceAll(RegExp(r'\s+'), ' ').trim();
     final title = cleaned.length > 50
@@ -1081,7 +1109,7 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
     lines.add('');
     for (final msg in _messages) {
       final role = (msg['role'] as String?) ?? 'unknown';
-      final content = (msg['content'] as String?) ?? '';
+      final content = messageContentToText(msg['content']);
       if (content.isEmpty) continue;
       if (role == 'user') {
         lines.add('**User:** $content');
@@ -1406,7 +1434,7 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
   Future<void> _copySelectedMessages() async {
     final selected = _selectedMessageIndices.toList()..sort();
     final text = selected
-        .map((index) => (_messages[index]['content'] as String?) ?? '')
+        .map((index) => messageContentToText(_messages[index]['content']))
         .where((content) => content.isNotEmpty)
         .join('\n\n');
     if (text.isEmpty) return;
@@ -1501,12 +1529,33 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
     }
 
     // Build display list: consecutive tool messages grouped into cards,
-    // interleaved with user/assistant bubbles.
+    // interleaved with user/assistant bubbles.  Question blocks found in
+    // message history are rendered inline as QuestionCard widgets at the
+    // position they occurred.
     final toolQueue = List<Map<String, dynamic>>.from(_toolMessages);
     final displayMessages = <dynamic>[];
     final currentGroup = <Map<String, dynamic>>[];
 
+    // Map question_id → Question for inline lookup.
+    final questionMap = <String, Question>{
+      for (final q in _activeQuestions) if (q.id.isNotEmpty) q.id: q,
+    };
+    final renderedQuestionIds = <String>{};
+
     for (final msg in _messages) {
+      // If this message carries a question block, render the Question card
+      // inline instead of the raw message.
+      final qid = _extractQuestionIdFromMessage(msg);
+      if (qid != null && questionMap.containsKey(qid)) {
+        renderedQuestionIds.add(qid);
+        if (currentGroup.isNotEmpty) {
+          displayMessages.add(currentGroup.toList());
+          currentGroup.clear();
+        }
+        displayMessages.add(questionMap[qid]!);
+        continue;
+      }
+
       final role = (msg['role'] as String?) ?? 'assistant';
       if (role == 'tool') {
         if (toolQueue.isNotEmpty) {
@@ -1515,7 +1564,7 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
         continue;
       }
       if (role != 'user' && role != 'assistant') continue;
-      final content = (msg['content'] as String?) ?? '';
+      final content = messageContentToText(msg['content']);
       final deliveryState = msg['deliveryState'] as String?;
       // Skip empty messages that don't have a delivery state (e.g. the
       // initial assistant placeholder before any tokens arrive is
@@ -1538,9 +1587,13 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
       displayMessages.add(toolQueue.toList());
     }
 
-    // Append pending question cards after messages
+    // Append pending questions that weren't already rendered inline
+    // (e.g. questions that arrived via SSE but aren't in message history yet).
     final pendingQuestions = _activeQuestions
-        .where((q) => q.isPending)
+        .where((q) =>
+            q.isPending &&
+            q.id.isNotEmpty &&
+            !renderedQuestionIds.contains(q.id))
         .toList();
     for (final q in pendingQuestions) {
       displayMessages.add(q);
@@ -1594,7 +1647,7 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
 
         final msg = item as Map<String, dynamic>;
         final role = (msg['role'] as String?) ?? 'assistant';
-        final content = (msg['content'] as String?) ?? '';
+        final content = messageContentToText(msg['content']);
         final isUser = role == 'user';
         final deliveryState = msg['deliveryState'] as String?;
 
@@ -2094,7 +2147,7 @@ class _ToolProgressCard extends StatelessWidget {
     });
 
     final emojis = items.map((item) {
-      final content = (item['content'] as String?) ?? '';
+      final content = messageContentToText(item['content']);
       return content.isNotEmpty
           ? content.substring(0, content.length < 2 ? content.length : 2)
           : '\uD83D\uDD27';

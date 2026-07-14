@@ -4,6 +4,14 @@ All notable changes to this project are documented here. This project adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html). Release notes for
 versions prior to 1.0.7 are in the **What's new** sections of the [README](README.md).
 
+## [1.0.26]
+
+### Fixed
+- **Inline question rendering** — structured questions (choice, confirmation, text, number, date-time) from message history are now rendered inline at their conversation position instead of only showing pending questions at the bottom. Answered questions remain visible as read-only cards.
+- **Confirmation cancel payload** — cancel button on confirmation questions now sends `{"cancelled": true}` instead of `{"confirmed": false}`, matching the convention used by all other question types.
+- **Answer field names** — fixed answer payload field names for text (`text`), number (`number`), and date-time (`datetime`) questions to match the documented API contract.
+- **Dead code removal** — removed unused `getQuestion()` method that called a non-existent server endpoint.
+
 ## [1.0.25]
 
 ### Changed
