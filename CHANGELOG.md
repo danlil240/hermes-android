@@ -4,6 +4,14 @@ All notable changes to this project are documented here. This project adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html). Release notes for
 versions prior to 1.0.7 are in the **What's new** sections of the [README](README.md).
 
+## [1.0.27]
+
+### Added
+- **Persistent question SSE stream** — a `QuestionStreamController` keeps a live SSE connection to `/api/sessions/{id}/stream` for the lifetime of the chat screen, marking the session as interactive so the LLM's `ask_*_question` tools work and delivering real-time question events (`hermes.question`, `hermes.question.answered`, `hermes.question.expired`) with auto-reconnect and backoff.
+
+### Fixed
+- **Question list parsing** — `getQuestions` now checks `data['questions']` before falling back to `data['data']`, matching the actual API response shape.
+
 ## [1.0.26]
 
 ### Fixed

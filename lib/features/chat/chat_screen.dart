@@ -49,6 +49,7 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
   late final GatewayChatClient _gateway;
   SessionCache? _cache;
   StreamSubscription<BackgroundChatEvent>? _backgroundChatEvents;
+  QuestionStreamController? _questionStream;
 
   // Chat sending state
   final _textController = TextEditingController();
@@ -108,6 +109,7 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
     _backgroundChatEvents = BackgroundChatService.events.listen(
       _handleBackgroundChatEvent,
     );
+    _startQuestionStream();
     _initializeCacheAndFetch();
     _loadVerboseMode();
     _initVoice();
@@ -124,6 +126,7 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
     _savedPositions[widget.session.id] = _lastPixels;
     WidgetsBinding.instance.removeObserver(this);
     _backgroundChatEvents?.cancel();
+    _questionStream?.cancel();
     _stopElapsedTimer();
     _speechToText.cancel();
     _flutterTts.stop();
@@ -671,6 +674,28 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
           ? question.title
           : 'Pending question',
       resolved: !question.isPending,
+    );
+  }
+
+  /// Start the persistent question SSE stream for this session.
+  ///
+  /// This marks the session as interactive on the server (so the LLM's
+  /// ask_*_question tools work) and delivers question events in real-time.
+  void _startQuestionStream() {
+    _questionStream = QuestionStreamController(
+      _client,
+      widget.session.id,
+      onQuestion: _handleQuestionSseEvent,
+      onAnswered: (data) {
+        if (!mounted) return;
+        final updated = Question.fromJson(data);
+        setState(() => _upsertQuestion(updated));
+      },
+      onExpired: (data) {
+        if (!mounted) return;
+        final updated = Question.fromJson(data);
+        setState(() => _upsertQuestion(updated));
+      },
     );
   }
 

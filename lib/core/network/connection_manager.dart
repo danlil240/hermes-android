@@ -697,7 +697,7 @@ class ApiClient {
       return data.whereType<Map<String, dynamic>>().toList();
     }
     if (data is Map<String, dynamic>) {
-      final list = data['data'] as List? ?? [];
+      final list = data['questions'] as List? ?? data['data'] as List? ?? [];
       return list.whereType<Map<String, dynamic>>().toList();
     }
     return [];
@@ -1618,5 +1618,156 @@ class DashboardServiceRunStreamController {
   void cancel() {
     _cancelled = true;
     _subscription?.cancel();
+  }
+}
+
+/// Persistent SSE client for the question event stream.
+///
+/// Connects to `GET /api/sessions/{sessionId}/stream` and stays open for the
+/// lifetime of the chat screen.  This does two critical things:
+///
+/// 1. **Marks the session as interactive** on the server so the LLM's
+///    `ask_choice_question` / `ask_confirmation_question` tools work (they
+///    return a fallback message when the session is not interactive).
+/// 2. **Delivers question events in real-time** — `hermes.question`,
+///    `hermes.question.answered`, `hermes.question.expired` — so the UI can
+///    render buttons and the user can answer before the agent times out.
+///
+/// Auto-reconnects with a backoff when the connection drops.
+class QuestionStreamController {
+  final ApiClient _client;
+  final String _sessionId;
+  final void Function(Map<String, dynamic> data) _onQuestion;
+  final void Function(Map<String, dynamic> data) _onAnswered;
+  final void Function(Map<String, dynamic> data) _onExpired;
+  http.StreamedResponse? _response;
+  StreamSubscription? _subscription;
+  bool _cancelled = false;
+  int _reconnectDelay = 1;
+
+  QuestionStreamController(
+    this._client,
+    this._sessionId, {
+    required void Function(Map<String, dynamic> data) onQuestion,
+    void Function(Map<String, dynamic> data)? onAnswered,
+    void Function(Map<String, dynamic> data)? onExpired,
+  })  : _onQuestion = onQuestion,
+        _onAnswered = onAnswered ?? _noop,
+        _onExpired = onExpired ?? _noop {
+    _connect();
+  }
+
+  static void _noop(Map<String, dynamic> _) {}
+
+  Future<void> _connect() async {
+    if (_cancelled) return;
+    try {
+      final request = http.Request(
+        'GET',
+        Uri.parse('${_client.baseUrl}/api/sessions/$_sessionId/stream'),
+      );
+      request.headers.addAll({
+        'Authorization': 'Bearer ${_client._apiKey}',
+        'Accept': 'text/event-stream',
+      });
+      final cfId = _client._cfAccessClientId;
+      if (cfId != null && cfId.isNotEmpty) {
+        request.headers['CF-Access-Client-Id'] = cfId;
+      }
+      final cfSecret = _client._cfAccessClientSecret;
+      if (cfSecret != null && cfSecret.isNotEmpty) {
+        request.headers['CF-Access-Client-Secret'] = cfSecret;
+      }
+
+      _response = await _client._http.send(request);
+
+      if (_response!.statusCode != 200) {
+        await _response!.stream.bytesToString();
+        _scheduleReconnect();
+        return;
+      }
+
+      _reconnectDelay = 1;
+      String buffer = '';
+      _subscription = _response!.stream.transform(utf8.decoder).listen(
+        (chunk) {
+          buffer += chunk;
+          while (buffer.contains('\n\n')) {
+            final eventEnd = buffer.indexOf('\n\n');
+            final frame = buffer.substring(0, eventEnd);
+            buffer = buffer.substring(eventEnd + 2);
+            _parseSseFrame(frame);
+          }
+        },
+        onDone: () {
+          if (!_cancelled) {
+            _scheduleReconnect();
+          }
+        },
+        onError: (_) {
+          if (!_cancelled) {
+            _scheduleReconnect();
+          }
+        },
+      );
+    } catch (_) {
+      if (!_cancelled) {
+        _scheduleReconnect();
+      }
+    }
+  }
+
+  void _scheduleReconnect() {
+    if (_cancelled) return;
+    _subscription?.cancel();
+    _subscription = null;
+    _response = null;
+    final delay = _reconnectDelay;
+    _reconnectDelay = (_reconnectDelay * 2).clamp(1, 30);
+    Future.delayed(Duration(seconds: delay), () {
+      if (!_cancelled) _connect();
+    });
+  }
+
+  void _parseSseFrame(String frame) {
+    String eventType = '';
+    final dataLines = <String>[];
+
+    for (final rawLine in frame.split('\n')) {
+      final line = rawLine.trimRight();
+      if (line.isEmpty || line.startsWith(':')) continue;
+      if (line.startsWith('event:')) {
+        eventType = line.substring(6).trim();
+      } else if (line.startsWith('data:')) {
+        dataLines.add(line.substring(5).trimLeft());
+      }
+    }
+
+    if (dataLines.isEmpty) return;
+    final data = dataLines.join('\n').trim();
+    if (data.isEmpty || data == '[DONE]') return;
+
+    try {
+      final parsed = jsonDecode(data);
+      if (parsed is! Map<String, dynamic>) return;
+      switch (eventType) {
+        case 'hermes.question':
+          final question = parsed['question'];
+          _onQuestion(question is Map<String, dynamic> ? question : parsed);
+          break;
+        case 'hermes.question.answered':
+          _onAnswered(parsed);
+          break;
+        case 'hermes.question.expired':
+          _onExpired(parsed);
+          break;
+      }
+    } catch (_) {}
+  }
+
+  void cancel() {
+    _cancelled = true;
+    _subscription?.cancel();
+    _response = null;
   }
 }
