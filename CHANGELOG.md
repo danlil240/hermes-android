@@ -4,6 +4,13 @@ All notable changes to this project are documented here. This project adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html). Release notes for
 versions prior to 1.0.7 are in the **What's new** sections of the [README](README.md).
 
+## [1.0.28]
+
+### Fixed
+- **Question stream lifecycle** — `QuestionStreamController` now properly cancels on chat screen dispose and waits for connection before message submission.
+- **Inline question rendering refinements** — improved question block extraction from message history and rendering of answered questions as read-only cards.
+- **Message content handling** — switched from raw `String` casts to `messageContentToText()` for robust content extraction across user and assistant messages.
+
 ## [1.0.27]
 
 ### Added

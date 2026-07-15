@@ -135,6 +135,24 @@ class Question {
     );
   }
 
+  /// Human-readable label for an option id, falling back to the id itself.
+  String labelForOption(String? optionId) {
+    if (optionId == null || optionId.isEmpty) return '';
+    for (final o in options) {
+      if (o.id == optionId) return o.label.isNotEmpty ? o.label : o.id;
+    }
+    return optionId;
+  }
+
+  /// Human-readable labels for the currently selected option(s).
+  List<String> get selectedLabels {
+    if (isSingleChoice || isConfirmation) {
+      final label = labelForOption(selectedOptionId);
+      return label.isEmpty ? const [] : [label];
+    }
+    return selectedOptionIds.map(labelForOption).where((l) => l.isNotEmpty).toList();
+  }
+
   bool get isPending => status == QuestionStatus.pending;
   bool get isAnswered => status == QuestionStatus.answered;
   bool get isSingleChoice =>

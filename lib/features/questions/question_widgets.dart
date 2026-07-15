@@ -1,7 +1,7 @@
 // Question renderer widgets for LLM-driven structured questions.
 //
 // Supports:
-//   - choice_question mode=single   → radio buttons / large choice buttons
+//   - choice_question mode=single   → large tap-to-answer choice buttons
 //   - choice_question mode=multiple  → checkboxes + submit button
 //   - confirmation_question          → confirm/cancel card
 //   - text_input_question            → text field + submit button
@@ -179,12 +179,15 @@ class _SingleChoiceCard extends StatefulWidget {
 }
 
 class _SingleChoiceCardState extends State<_SingleChoiceCard> {
-  String? _selected;
+  // The option the user just tapped (before the server confirms). Lets us
+  // highlight the choice immediately even while the answer is in flight.
+  String? _pending;
 
-  void _submit() {
-    if (_selected == null) return;
+  void _answer(String optionId) {
+    if (!widget.enabled) return;
+    setState(() => _pending = optionId);
     widget.onAnswer(widget.question.id, {
-      'selected_option_id': _selected,
+      'selected_option_id': optionId,
     });
   }
 
@@ -192,7 +195,9 @@ class _SingleChoiceCardState extends State<_SingleChoiceCard> {
   Widget build(BuildContext context) {
     final q = widget.question;
     final answered = q.isAnswered;
-    final selectedId = answered ? q.selectedOptionId : _selected;
+    final selectedId = answered ? q.selectedOptionId : _pending;
+    // Once answered (or an answer is in flight) the options become read-only.
+    final locked = answered || _pending != null || !widget.enabled;
 
     return _QuestionContainer(
       title: q.title,
@@ -203,21 +208,30 @@ class _SingleChoiceCardState extends State<_SingleChoiceCard> {
         children: [
           ...q.options.map((option) {
             final isSelected = selectedId == option.id;
+            // Dim unpicked options after a choice is locked in.
+            final dimmed = locked && !isSelected;
             return Padding(
               padding: const EdgeInsets.only(bottom: 8),
               child: SizedBox(
                 width: double.infinity,
                 child: FilledButton.tonal(
-                  onPressed: widget.enabled
-                      ? () => setState(() => _selected = option.id)
-                      : null,
+                  // Single press = submit immediately. Disabled once locked.
+                  onPressed: locked ? null : () => _answer(option.id),
                   style: FilledButton.styleFrom(
                     backgroundColor: isSelected
-                        ? const Color(0xFFD4AF37).withValues(alpha: 0.2)
+                        ? const Color(0xFFD4AF37).withValues(alpha: 0.25)
                         : null,
                     foregroundColor: isSelected
                         ? const Color(0xFFD4AF37)
-                        : null,
+                        : dimmed
+                            ? Colors.grey
+                            : null,
+                    disabledBackgroundColor: isSelected
+                        ? const Color(0xFFD4AF37).withValues(alpha: 0.25)
+                        : Colors.transparent,
+                    disabledForegroundColor: isSelected
+                        ? const Color(0xFFD4AF37)
+                        : Colors.grey,
                     alignment: Alignment.centerLeft,
                     padding: const EdgeInsets.symmetric(
                       horizontal: 16,
@@ -228,8 +242,8 @@ class _SingleChoiceCardState extends State<_SingleChoiceCard> {
                     children: [
                       Icon(
                         isSelected
-                            ? Icons.radio_button_checked
-                            : Icons.radio_button_unchecked,
+                            ? Icons.check_circle
+                            : Icons.circle_outlined,
                         size: 18,
                         color: isSelected
                             ? const Color(0xFFD4AF37)
@@ -243,33 +257,18 @@ class _SingleChoiceCardState extends State<_SingleChoiceCard> {
               ),
             );
           }),
-          if (!answered && widget.enabled) ...[
+          if (!answered && widget.enabled && _pending == null && q.cancelLabel != null) ...[
             const SizedBox(height: 4),
-            Row(
-              mainAxisAlignment: MainAxisAlignment.end,
-              children: [
-                if (q.cancelLabel != null)
-                  TextButton(
-                    onPressed: () => widget.onAnswer(q.id, {'cancelled': true}),
-                    child: Text(q.cancelLabel!),
-                  ),
-                if (q.submitLabel != null || q.cancelLabel == null)
-                  FilledButton(
-                    onPressed: _selected == null ? null : _submit,
-                    child: Text(q.submitLabel ?? 'Submit'),
-                  ),
-              ],
-            ),
-          ],
-          if (answered)
-            Text(
-              'Answered: ${q.selectedOptionId ?? ''}',
-              style: TextStyle(
-                fontSize: 12,
-                color: Colors.grey[500],
-                fontStyle: FontStyle.italic,
+            Align(
+              alignment: Alignment.centerRight,
+              child: TextButton(
+                onPressed: () => widget.onAnswer(q.id, {'cancelled': true}),
+                child: Text(q.cancelLabel!),
               ),
             ),
+          ],
+          if (selectedId != null && selectedId.isNotEmpty)
+            _AnswerSummary(labels: [q.labelForOption(selectedId)]),
         ],
       ),
     );
@@ -369,15 +368,8 @@ class _MultipleChoiceCardState extends State<_MultipleChoiceCard> {
               ],
             ),
           ],
-          if (answered)
-            Text(
-              'Answered: ${q.selectedOptionIds.join(', ')}',
-              style: TextStyle(
-                fontSize: 12,
-                color: Colors.grey[500],
-                fontStyle: FontStyle.italic,
-              ),
-            ),
+          if (answered && q.selectedLabels.isNotEmpty)
+            _AnswerSummary(labels: q.selectedLabels),
         ],
       ),
     );
@@ -570,14 +562,7 @@ class _TextInputCardState extends State<_TextInputCard> {
             ),
           ],
           if (answered)
-            Text(
-              'Answered',
-              style: TextStyle(
-                fontSize: 12,
-                color: Colors.grey[500],
-                fontStyle: FontStyle.italic,
-              ),
-            ),
+            const _AnswerSummary(labels: ['Answered']),
         ],
       ),
     );
@@ -658,14 +643,7 @@ class _NumberInputCardState extends State<_NumberInputCard> {
             ),
           ],
           if (answered)
-            Text(
-              'Answered',
-              style: TextStyle(
-                fontSize: 12,
-                color: Colors.grey[500],
-                fontStyle: FontStyle.italic,
-              ),
-            ),
+            const _AnswerSummary(labels: ['Confirmed']),
         ],
       ),
     );
@@ -787,14 +765,54 @@ class _DateTimeCardState extends State<_DateTimeCard> {
             ),
           ],
           if (answered)
-            Text(
-              'Answered',
-              style: TextStyle(
-                fontSize: 12,
-                color: Colors.grey[500],
-                fontStyle: FontStyle.italic,
+            const _AnswerSummary(labels: ['Answered']),
+        ],
+      ),
+    );
+  }
+}
+
+/// Compact "your answer" banner shown once a question is answered.
+///
+/// Makes the user's choice clearly visible in the chat history instead of a
+/// faint "Answered" id line.
+class _AnswerSummary extends StatelessWidget {
+  final List<String> labels;
+
+  const _AnswerSummary({required this.labels});
+
+  @override
+  Widget build(BuildContext context) {
+    const accent = Color(0xFFD4AF37);
+    final text = labels.where((l) => l.isNotEmpty).join(', ');
+    if (text.isEmpty) return const SizedBox.shrink();
+
+    return Container(
+      margin: const EdgeInsets.only(top: 4),
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+      decoration: BoxDecoration(
+        color: accent.withValues(alpha: 0.12),
+        borderRadius: BorderRadius.circular(8),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          const Icon(Icons.check_circle, size: 16, color: accent),
+          const SizedBox(width: 6),
+          Text(
+            'Your answer: ',
+            style: TextStyle(fontSize: 12, color: Colors.grey[500]),
+          ),
+          Flexible(
+            child: Text(
+              text,
+              style: const TextStyle(
+                fontSize: 13,
+                color: accent,
+                fontWeight: FontWeight.w600,
               ),
             ),
+          ),
         ],
       ),
     );

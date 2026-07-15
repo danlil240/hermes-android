@@ -3,6 +3,7 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
+import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
 import 'background_chat_service.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -1644,6 +1645,10 @@ class QuestionStreamController {
   StreamSubscription? _subscription;
   bool _cancelled = false;
   int _reconnectDelay = 1;
+  // Completes the first time the SSE stream connects (HTTP 200). At that point
+  // the server has marked this session interactive, so the LLM's
+  // ask_*_question tools will work.
+  final Completer<void> _firstConnected = Completer<void>();
 
   QuestionStreamController(
     this._client,
@@ -1658,6 +1663,22 @@ class QuestionStreamController {
   }
 
   static void _noop(Map<String, dynamic> _) {}
+
+  /// Awaits until the question stream has connected at least once (so the
+  /// session is marked interactive on the server). Returns false if it doesn't
+  /// connect within [timeout]. Callers should await this before submitting a
+  /// run so structured-question tools work on the very first message.
+  Future<bool> waitUntilConnected({
+    Duration timeout = const Duration(seconds: 8),
+  }) async {
+    if (_firstConnected.isCompleted) return true;
+    try {
+      await _firstConnected.future.timeout(timeout);
+      return true;
+    } catch (_) {
+      return false;
+    }
+  }
 
   Future<void> _connect() async {
     if (_cancelled) return;
@@ -1682,12 +1703,18 @@ class QuestionStreamController {
       _response = await _client._http.send(request);
 
       if (_response!.statusCode != 200) {
-        await _response!.stream.bytesToString();
+        final body = await _response!.stream.bytesToString();
+        debugPrint(
+          'QuestionStream: connect failed HTTP ${_response!.statusCode} '
+          'for session $_sessionId — ${body.substring(0, body.length < 200 ? body.length : 200)}',
+        );
         _scheduleReconnect();
         return;
       }
 
       _reconnectDelay = 1;
+      // Stream is live — the server has now marked this session interactive.
+      if (!_firstConnected.isCompleted) _firstConnected.complete();
       String buffer = '';
       _subscription = _response!.stream.transform(utf8.decoder).listen(
         (chunk) {
@@ -1710,7 +1737,8 @@ class QuestionStreamController {
           }
         },
       );
-    } catch (_) {
+    } catch (e) {
+      debugPrint('QuestionStream: connect error for session $_sessionId: $e');
       if (!_cancelled) {
         _scheduleReconnect();
       }

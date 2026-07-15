@@ -798,6 +798,12 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
 
     WidgetsBinding.instance.addPostFrameCallback((_) => _scrollToBottom());
 
+    // Make sure the interactive question stream has connected (and the server
+    // has marked this session interactive) BEFORE we submit the run. Otherwise
+    // the LLM's ask_*_question tools race the stream and fall back to plain
+    // text on the first message. Capped so a stream failure never blocks send.
+    await _questionStream?.waitUntilConnected();
+
     // Android submits a server-owned run. The foreground service only polls
     // status for a notification; the Hermes server owns execution and keeps
     // it alive after the app or phone disconnects.
@@ -1666,7 +1672,7 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
           return QuestionCard(
             question: item,
             onAnswer: _handleQuestionAnswer,
-            enabled: !_streaming,
+            enabled: true,
           );
         }
 
@@ -2153,11 +2159,22 @@ class _ActionChip extends StatelessWidget {
   }
 }
 
-class _ToolProgressCard extends StatelessWidget {
+/// Card that shows the agent's tool/process activity. Collapsed it lists the
+/// tool names at a glance; tapping expands it to reveal every step (its emoji,
+/// tool name and status). In verbose mode it starts expanded and shows the raw
+/// content of each step so the full thinking/process is visible.
+class _ToolProgressCard extends StatefulWidget {
   final List<Map<String, dynamic>> items;
   final bool verbose;
 
   const _ToolProgressCard({required this.items, this.verbose = false});
+
+  @override
+  State<_ToolProgressCard> createState() => _ToolProgressCardState();
+}
+
+class _ToolProgressCardState extends State<_ToolProgressCard> {
+  bool? _expanded;
 
   @override
   Widget build(BuildContext context) {
@@ -2166,17 +2183,23 @@ class _ToolProgressCard extends StatelessWidget {
     final bg = isDark ? const Color(0xFF2A2A2A) : const Color(0xFFEAEAEA);
     final fg = isDark ? Colors.white70 : Colors.black54;
 
+    final items = widget.items;
     final active = items.any((item) {
       final status = (item['status'] as String?) ?? '';
       return status != 'completed' && status != 'finished';
     });
 
-    final emojis = items.map((item) {
-      final content = messageContentToText(item['content']);
-      return content.isNotEmpty
-          ? content.substring(0, content.length < 2 ? content.length : 2)
-          : '\uD83D\uDD27';
-    }).toList();
+    // Default expanded when verbose or while tools are still running.
+    final expanded = _expanded ?? (widget.verbose || active);
+
+    // Friendly summary of tool names for the collapsed header.
+    final names = items
+        .map((item) => (item['tool'] as String?)?.trim() ?? '')
+        .where((n) => n.isNotEmpty && n != 'tool')
+        .toList();
+    final summary = names.isNotEmpty
+        ? names.join(', ')
+        : '${items.length} step${items.length == 1 ? '' : 's'}';
 
     return Container(
       margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
@@ -2188,23 +2211,86 @@ class _ToolProgressCard extends StatelessWidget {
         borderRadius: BorderRadius.circular(16),
       ),
       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-      child: Row(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        mainAxisSize: MainAxisSize.min,
         children: [
-          Text(
-            active ? '\u23F3' : '\u2705',
-            style: const TextStyle(fontSize: 13),
+          InkWell(
+            onTap: () => setState(() => _expanded = !expanded),
+            child: Row(
+              children: [
+                Text(
+                  active ? '\u23F3' : '\u2705',
+                  style: const TextStyle(fontSize: 13),
+                ),
+                const SizedBox(width: 6),
+                Expanded(
+                  child: Text(
+                    active ? 'Working — $summary' : summary,
+                    style: TextStyle(fontSize: 13, color: fg),
+                    maxLines: expanded ? null : 1,
+                    overflow: expanded ? null : TextOverflow.ellipsis,
+                  ),
+                ),
+                if (active)
+                  Padding(
+                    padding: const EdgeInsets.only(left: 8),
+                    child: SizedBox(
+                      width: 12,
+                      height: 12,
+                      child: CircularProgressIndicator(
+                        strokeWidth: 1.5,
+                        color: fg,
+                      ),
+                    ),
+                  )
+                else
+                  Icon(
+                    expanded ? Icons.expand_less : Icons.expand_more,
+                    size: 18,
+                    color: fg,
+                  ),
+              ],
+            ),
+          ),
+          if (expanded) ...[
+            const SizedBox(height: 6),
+            ...items.map((item) => _buildStep(context, item, fg)),
+          ],
+        ],
+      ),
+    );
+  }
+
+  Widget _buildStep(BuildContext context, Map<String, dynamic> item, Color fg) {
+    final content = messageContentToText(item['content']);
+    final tool = (item['tool'] as String?)?.trim() ?? '';
+    final status = (item['status'] as String?) ?? '';
+    final done = status == 'completed' || status == 'finished';
+
+    // `content` already reads like "<emoji> <tool> — <status>". Fall back to
+    // building a line from the tool name if content is empty.
+    final line = content.isNotEmpty
+        ? content
+        : (tool.isNotEmpty ? tool : 'tool');
+
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 2),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Icon(
+            done ? Icons.check_circle_outline : Icons.radio_button_unchecked,
+            size: 14,
+            color: fg,
           ),
           const SizedBox(width: 6),
-          Text(emojis.join(' '), style: const TextStyle(fontSize: 13)),
-          if (active)
-            Padding(
-              padding: const EdgeInsets.only(left: 8),
-              child: SizedBox(
-                width: 12,
-                height: 12,
-                child: CircularProgressIndicator(strokeWidth: 1.5, color: fg),
-              ),
+          Expanded(
+            child: Text(
+              line,
+              style: TextStyle(fontSize: 12.5, color: fg),
             ),
+          ),
         ],
       ),
     );
